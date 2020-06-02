@@ -1,5 +1,5 @@
 import { Signer } from "@ethersproject/abstract-signer";
-import { Web3Provider, TransactionResponse } from "@ethersproject/providers";
+import { Web3Provider } from "@ethersproject/providers";
 import { Contract, ContractFactory } from "@ethersproject/contracts";
 import { BigNumber } from "@ethersproject/bignumber";
 import { Wallet } from "@ethersproject/wallet";
@@ -51,10 +51,6 @@ export function addHelpers(
   env: BuidlerRuntimeEnvironment,
   partialExtension: PartialExtension, // TODO
   getArtifact: (name: string) => Promise<Artifact>,
-  onPendingTx: (
-    txHash: TransactionResponse,
-    data?: any
-  ) => Promise<TransactionResponse>,
   log: (...args: any[]) => void
 ): DeploymentsExtension {
   async function init() {
@@ -111,14 +107,19 @@ export function addHelpers(
     let ethersContract;
     ethersContract = await factory.deploy(...args, overrides);
 
-    let tx = ethersContract.deployTransaction;
+    const tx = ethersContract.deployTransaction;
     if (options.dev_forceMine) {
       try {
         await provider.send("evm_mine", []);
       } catch (e) {}
     }
+    let receipt;
+    receipt = await tx.wait();
+    const address = receipt.contractAddress;
+
     const extendedAtifact = artifact as any; // TODO future version of buidler will hopefully have that info
-    const preDeployment = {
+    await env.deployments.save(name, {
+      receipt,
       abi,
       args,
       linkedData: options.linkedData,
@@ -129,18 +130,20 @@ export function addHelpers(
       userdoc: extendedAtifact.userdoc,
       devdoc: extendedAtifact.devdoc,
       methodIdentifiers: extendedAtifact.methodIdentifiers
-    };
-    tx = await onPendingTx(tx, preDeployment);
-    const receipt = await tx.wait();
-    const address = receipt.contractAddress;
-    const deployment = {
-      ...preDeployment,
-      receipt
-    };
-    await env.deployments.save(name, deployment);
+    });
     return {
-      ...deployment,
+      receipt,
+      abi,
       address,
+      args,
+      linkedData: options.linkedData,
+      solidityJson: extendedAtifact.solidityJson,
+      solidityMetadata: extendedAtifact.solidityMetadata,
+      bytecode: artifact.bytecode,
+      deployedBytecode: artifact.deployedBytecode,
+      userdoc: extendedAtifact.userdoc,
+      devdoc: extendedAtifact.devdoc,
+      methodIdentifiers: extendedAtifact.methodIdentifiers,
       newlyDeployed: true
     };
   }
@@ -337,8 +340,7 @@ export function addHelpers(
         data: tx.data,
         chainId: Number(tx.chainId)
       };
-      let pendingTx = await ethersSigner.sendTransaction(transactionData);
-      pendingTx = await onPendingTx(pendingTx);
+      const pendingTx = await ethersSigner.sendTransaction(transactionData);
       if (tx.dev_forceMine) {
         try {
           await provider.send("evm_mine", []);
@@ -450,8 +452,6 @@ export function addHelpers(
       const ethersArgs = args ? args.concat([overrides]) : [overrides];
       tx = await ethersContract.functions[methodName](...ethersArgs);
     }
-
-    tx = await onPendingTx(tx);
 
     if (options.dev_forceMine) {
       try {
