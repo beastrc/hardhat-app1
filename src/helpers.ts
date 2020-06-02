@@ -1,6 +1,10 @@
 import { Signer } from "@ethersproject/abstract-signer";
-import { Web3Provider } from "@ethersproject/providers";
-import { Contract, ContractFactory } from "@ethersproject/contracts";
+import { Web3Provider, TransactionResponse, TransactionRequest } from "@ethersproject/providers";
+import {
+  Contract,
+  ContractFactory,
+  PayableOverrides
+} from "@ethersproject/contracts";
 import { BigNumber } from "@ethersproject/bignumber";
 import { Wallet } from "@ethersproject/wallet";
 import {
@@ -51,6 +55,13 @@ export function addHelpers(
   env: BuidlerRuntimeEnvironment,
   partialExtension: PartialExtension, // TODO
   getArtifact: (name: string) => Promise<Artifact>,
+  onPendingTx: (
+    txHash: TransactionResponse,
+    unsignedTx: TransactionRequest,
+    name?: string,
+    data?: any
+  ) => Promise<TransactionResponse>,
+  getGasPrice: () => Promise<BigNumber | undefined>,
   log: (...args: any[]) => void
 ): DeploymentsExtension {
   async function init() {
@@ -65,6 +76,38 @@ export function addHelpers(
     }
   }
 
+  async function setupGasPrice(overrides: any) {
+    if (!overrides.gasPrice) {
+      overrides.gasPrice = await getGasPrice();
+    }
+  }
+
+  async function overrideGasLimit(
+    overrides: any,
+    options: {
+      estimatedGasLimit?: number | BigNumber | string;
+      estimateGasExtra?: number | BigNumber | string;
+    },
+    estimate: (overrides: any) => Promise<BigNumber>
+  ) {
+    const estimatedGasLimit = options.estimatedGasLimit
+      ? BigNumber.from(options.estimatedGasLimit).toNumber()
+      : undefined;
+    const estimateGasExtra = options.estimateGasExtra
+      ? BigNumber.from(options.estimateGasExtra).toNumber()
+      : undefined;
+    if (!overrides.gasLimit) {
+      overrides.gasLimit = estimatedGasLimit;
+      overrides.gasLimit = (await estimate(overrides)).toNumber();
+      if (estimateGasExtra) {
+        overrides.gasLimit = overrides.gasLimit + estimateGasExtra;
+        if (estimatedGasLimit) {
+          overrides.gasLimit = Math.min(overrides.gasLimit, estimatedGasLimit);
+        }
+      }
+    }
+  }
+
   async function _deploy(
     name: string,
     options: DeployOptions
@@ -72,7 +115,7 @@ export function addHelpers(
     const args: any[] = options.args || [];
     await init();
     let from = options.from;
-    let ethersSigner;
+    let ethersSigner: Signer;
     if (!from) {
       throw new Error("no from specified");
     }
@@ -80,10 +123,15 @@ export function addHelpers(
       if (from.length === 64) {
         from = "0x" + from;
       }
-      ethersSigner = new Wallet(from);
-      from = ethersSigner.address;
+      const wallet = new Wallet(from);
+      from = wallet.address;
+      ethersSigner = wallet;
     } else {
-      ethersSigner = provider.getSigner(from);
+      if (availableAccounts[from.toLowerCase()]) {
+        ethersSigner = provider.getSigner(from);
+      } else {
+        throw new Error(`no signer for ${from}`);
+      }
     }
     const artifact = await getArtifact(options.contractName || name);
     const abi = artifact.abi;
@@ -95,31 +143,34 @@ export function addHelpers(
     //     byteCode = linkLibrary(byteCode, libName, libAddress);
     //   }
     // }
-    const factory = new ContractFactory(abi, byteCode, ethersSigner as Signer);
+    const factory = new ContractFactory(abi, byteCode, ethersSigner);
 
-    const overrides = {
+    const overrides: PayableOverrides = {
       gasLimit: options.gasLimit,
       gasPrice: options.gasPrice,
       value: options.value,
-      nonce: options.nonce,
-      chainId: options.chainId
+      nonce: options.nonce
     };
-    let ethersContract;
-    ethersContract = await factory.deploy(...args, overrides);
 
-    const tx = ethersContract.deployTransaction;
+    const unsignedTx = factory.getDeployTransaction(...args, overrides);
+    await overrideGasLimit(unsignedTx, options, newOverrides =>
+      ethersSigner.estimateGas(newOverrides)
+    );
+    await setupGasPrice(unsignedTx);
+    let tx = await ethersSigner.sendTransaction(unsignedTx);
+
+    // let ethersContract;
+    // ethersContract = await factory.deploy(...args, overrides);
+    // let unsignedTx = {};
+    // let tx = ethersContract.deployTransaction;
+  
     if (options.dev_forceMine) {
       try {
         await provider.send("evm_mine", []);
       } catch (e) {}
     }
-    let receipt;
-    receipt = await tx.wait();
-    const address = receipt.contractAddress;
-
     const extendedAtifact = artifact as any; // TODO future version of buidler will hopefully have that info
-    await env.deployments.save(name, {
-      receipt,
+    const preDeployment = {
       abi,
       args,
       linkedData: options.linkedData,
@@ -130,20 +181,18 @@ export function addHelpers(
       userdoc: extendedAtifact.userdoc,
       devdoc: extendedAtifact.devdoc,
       methodIdentifiers: extendedAtifact.methodIdentifiers
-    });
+    };
+    tx = await onPendingTx(tx, unsignedTx, name, preDeployment);
+    const receipt = await tx.wait();
+    const address = receipt.contractAddress;
+    const deployment = {
+      ...preDeployment,
+      receipt
+    };
+    await env.deployments.save(name, deployment);
     return {
-      receipt,
-      abi,
+      ...deployment,
       address,
-      args,
-      linkedData: options.linkedData,
-      solidityJson: extendedAtifact.solidityJson,
-      solidityMetadata: extendedAtifact.solidityMetadata,
-      bytecode: artifact.bytecode,
-      deployedBytecode: artifact.deployedBytecode,
-      userdoc: extendedAtifact.userdoc,
-      devdoc: extendedAtifact.devdoc,
-      methodIdentifiers: extendedAtifact.methodIdentifiers,
       newlyDeployed: true
     };
   }
@@ -337,10 +386,10 @@ export function addHelpers(
         gasPrice: tx.gasPrice ? BigNumber.from(tx.gasPrice) : undefined, // TODO cinfig
         value: tx.value ? BigNumber.from(tx.value) : undefined,
         nonce: tx.nonce,
-        data: tx.data,
-        chainId: Number(tx.chainId)
+        data: tx.data
       };
-      const pendingTx = await ethersSigner.sendTransaction(transactionData);
+      let pendingTx = await ethersSigner.sendTransaction(transactionData);
+      pendingTx = await onPendingTx(pendingTx, transactionData);
       if (tx.dev_forceMine) {
         try {
           await provider.send("evm_mine", []);
@@ -374,14 +423,14 @@ export function addHelpers(
     }
 
     let tx;
+    let unsignedTx;
     const deployment = await env.deployments.get(name);
     const abi = deployment.abi;
     const overrides = {
       gasLimit: options.gasLimit,
       gasPrice: options.gasPrice ? BigNumber.from(options.gasPrice) : undefined, // TODO cinfig
       value: options.value ? BigNumber.from(options.value) : undefined,
-      nonce: options.nonce,
-      chainId: options.chainId
+      nonce: options.nonce
     };
 
     const ethersContract = new Contract(
@@ -429,29 +478,25 @@ export function addHelpers(
       }
       throw new Error("ABORT, ACTION REQUIRED, see above");
     } else {
-      if (!overrides.gasLimit) {
-        overrides.gasLimit = options.estimatedGasLimit;
+      await overrideGasLimit(overrides, options, newOverrides => {
         const ethersArgsWithGasLimit = args
-          ? args.concat([overrides])
-          : [overrides];
-        overrides.gasLimit = (
-          await ethersContract.estimateGas[methodName](
-            ...ethersArgsWithGasLimit
-          )
-        ).toNumber();
-        if (options.estimateGasExtra) {
-          overrides.gasLimit = overrides.gasLimit + options.estimateGasExtra;
-          if (options.estimatedGasLimit) {
-            overrides.gasLimit = Math.min(
-              overrides.gasLimit,
-              options.estimatedGasLimit
-            );
-          }
-        }
-      }
+          ? args.concat([newOverrides])
+          : [newOverrides];
+        return ethersContract.estimateGas[methodName](
+          ...ethersArgsWithGasLimit
+        );
+      });
+      await setupGasPrice(overrides);
       const ethersArgs = args ? args.concat([overrides]) : [overrides];
-      tx = await ethersContract.functions[methodName](...ethersArgs);
+      const { data, to } = await ethersContract.populateTransaction[methodName](
+        ...ethersArgs
+      );
+
+      unsignedTx = { ...overrides, data, to };
+      tx = await ethersSigner.sendTransaction(unsignedTx);
     }
+
+    tx = await onPendingTx(tx, unsignedTx);
 
     if (options.dev_forceMine) {
       try {
@@ -508,12 +553,11 @@ export function addHelpers(
       throw new Error(`no contract named "${name}"`);
     }
     const abi = deployment.abi;
-    const overrides = {
+    const overrides: PayableOverrides = {
       gasLimit: options.gasLimit,
       gasPrice: options.gasPrice ? BigNumber.from(options.gasPrice) : undefined, // TODO cinfig
       value: options.value ? BigNumber.from(options.value) : undefined,
-      nonce: options.nonce,
-      chainId: options.chainId
+      nonce: options.nonce
     };
     const ethersContract = new Contract(
       deployment.address,
