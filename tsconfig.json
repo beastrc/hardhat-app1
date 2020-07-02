@@ -8,8 +8,7 @@
     "outDir": "./dist",
     "strict": true,
     "rootDirs": ["./src", "./test"],
-    "esModuleInterop": true,
-    "resolveJsonModule": true,
+    "esModuleInterop": true
   },
   // "files": [], // Any Buidler plugin's main .d.ts has to be added here
   "exclude": ["dist", "node_modules"],
