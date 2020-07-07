@@ -64,40 +64,13 @@ declare module "@nomiclabs/buidler/types" {
     confirmations?: number;
   };
 
-  export type DiamondFacets = Array<string>; // TODO support Object for facet : {contract}
-  export interface DiamondOptions extends TxOptions {
-    admin?: Address;
-    facets: DiamondFacets;
-    log?: boolean;
-    libraries?: { [libraryName: string]: Address };
-    linkedData?: any; // JSONable ?
-    upgradeIndex?: number;
-    execute?: {
-      methodName: string;
-      args: any[];
-    };
-  }
-
-  export interface ProxyOptions {
-    admin?: Address;
-    upgradeIndex?: number;
-  }
-
   export interface DeployOptions extends TxOptions {
-    contract?:
-      | string
-      | {
-          abi: ABI;
-          bytecode: string;
-          deployedBytecode?: string;
-        };
+    contractName?: string;
     args?: any[];
     fieldsToCompare?: string | string[];
-    skipIfAlreadyDeployed?: boolean;
     log?: boolean;
     linkedData?: any; // JSONable ?
-    libraries?: { [libraryName: string]: Address };
-    proxy?: boolean | ProxyOptions; // TODO support different type of proxies ?
+    libraries?: {[libraryName: string]: Address}
   }
 
   export interface CallOptions {
@@ -138,12 +111,12 @@ declare module "@nomiclabs/buidler/types" {
   }
 
   export type Json =
-    | null
-    | boolean
-    | number
-    | string
-    | Json[]
-    | { [prop: string]: Json };
+  | null
+  | boolean
+  | number
+  | string
+  | Json[]
+  | { [prop: string]: Json };
 
   // from https://github.com/Microsoft/TypeScript/issues/1897#issuecomment-580962081
   type JsonCompatible<T> = {
@@ -156,14 +129,10 @@ declare module "@nomiclabs/buidler/types" {
       : JsonCompatible<T[P]>;
   };
 
-  export type FixtureFunc = (
-    env: BuidlerRuntimeEnvironment,
-    options?: Json
-  ) => Promise<any>;
+  export type FixtureFunc = (env: BuidlerRuntimeEnvironment, options? : Json) => Promise<any>;
 
   export interface DeploymentsExtension {
     deploy(name: string, options: DeployOptions): Promise<DeployResult>;
-    diamond(name: string, options: DiamondOptions): Promise<DeployResult>;
     fetchIfDifferent(name: string, options: DeployOptions): Promise<boolean>;
     save(name: string, deployment: DeploymentSubmission): Promise<void>;
     get(name: string): Promise<Deployment>;
@@ -235,7 +204,6 @@ declare module "@nomiclabs/buidler/types" {
     abi: ABI;
     receipt: Receipt;
     address?: Address; // used to override receipt.contractAddress (useful for proxies)
-    history?: Deployment[];
     args?: any[];
     linkedData?: any;
     solidityJson?: any; // TODO solidityJson type
@@ -245,15 +213,12 @@ declare module "@nomiclabs/buidler/types" {
     userdoc: any;
     devdoc: any;
     methodIdentifiers: any;
-    diamondCuts?: string[];
-    facets?: { address: string; sigs: string[] }[];
   }
 
   export interface Deployment {
     abi: ABI;
     address: Address;
     receipt: Receipt;
-    history?: Deployment[];
     args?: any[];
     linkedData?: any;
     solidityJson?: any; // TODO solidityJson type
@@ -263,7 +228,5 @@ declare module "@nomiclabs/buidler/types" {
     userdoc: any;
     devdoc: any;
     methodIdentifiers: any;
-    diamondCuts?: string[];
-    facets?: { address: string; sigs: string[] }[];
   }
 }
