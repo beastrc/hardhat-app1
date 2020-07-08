@@ -12,7 +12,6 @@ import {
 import { BigNumber } from "@ethersproject/bignumber";
 import { Wallet } from "@ethersproject/wallet";
 import { keccak256 as solidityKeccak256 } from "@ethersproject/solidity";
-import { Interface, FunctionFragment } from "@ethersproject/abi";
 import {
   BuidlerRuntimeEnvironment,
   DeployFunction,
@@ -29,22 +28,9 @@ import {
   SimpleTx,
   Receipt,
   Execute,
-  Address,
-  ProxyOptions,
-  DiamondFacets,
-  DiamondOptions
+  Address
 } from "@nomiclabs/buidler/types";
 import { PartialExtension } from "./types";
-import transparentProxy from "../artifacts/TransparentProxy.json";
-import diamondBase from "../artifacts/DiamondBase.json";
-import diamondFacet from "../artifacts/DiamondFacet.json";
-import diamondLoopeFacet from "../artifacts/DiamondLoupeFacet.json";
-import diamantaire from "../artifacts/Diamantaire.json";
-import { string } from "@nomiclabs/buidler/internal/core/params/argumentTypes";
-
-diamondBase.abi = diamondBase.abi
-  .concat(diamondFacet.abi)
-  .concat(diamondLoopeFacet.abi);
 
 function fixProvider(providerGiven: any): any {
   // alow it to be used by ethers without any change
@@ -202,35 +188,32 @@ export function addHelpers(
     }
   }
 
-  async function getArtifactFromOptions(
-    name: string,
-    options: DeployOptions
-  ): Promise<{ abi: any; bytecode: string; deployedBytecode?: string }> {
-    let artifact: { abi: any; bytecode: string; deployedBytecode?: string };
-    if (options.contract) {
-      if (typeof options.contract === "string") {
-        artifact = await getArtifact(options.contract);
-      } else {
-        artifact = options.contract;
-      }
-    } else {
-      artifact = await getArtifact(name);
-    }
-    return artifact;
-  }
-
   async function _deploy(
     name: string,
     options: DeployOptions
   ): Promise<DeployResult> {
     const args: any[] = options.args || [];
     await init();
-    const { address: from, ethersSigner } = getFrom(options.from);
-    if (!ethersSigner) {
-      throw new Error("no signer for " + from);
+    let from = options.from;
+    let ethersSigner: Signer;
+    if (!from) {
+      throw new Error("no from specified");
     }
-    const artifact = await getArtifactFromOptions(name, options);
-
+    if (from.length >= 64) {
+      if (from.length === 64) {
+        from = "0x" + from;
+      }
+      const wallet = new Wallet(from);
+      from = wallet.address;
+      ethersSigner = wallet;
+    } else {
+      if (availableAccounts[from.toLowerCase()]) {
+        ethersSigner = provider.getSigner(from);
+      } else {
+        throw new Error(`no signer for ${from}`);
+      }
+    }
+    const artifact = await getArtifact(options.contractName || name);
     const abi = artifact.abi;
     const byteCode = linkLibraries(artifact, options.libraries);
     const factory = new ContractFactory(abi, byteCode, ethersSigner);
@@ -291,10 +274,6 @@ export function addHelpers(
     return env.deployments.get(name);
   }
 
-  function getDeploymentOrNUll(name: string): Promise<Deployment | null> {
-    return env.deployments.getOrNull(name);
-  }
-
   async function fetchIfDifferent(
     name: string,
     options: DeployOptions
@@ -307,15 +286,11 @@ export function addHelpers(
         : options.fieldsToCompare || [];
     const deployment = await env.deployments.getOrNull(name);
     if (deployment) {
-      if (options.skipIfAlreadyDeployed) {
-        return false; // TODO check receipt, see below
-      }
-      // TODO transactionReceipt + check for status
       const transaction = await provider.getTransaction(
         deployment.receipt.transactionHash
       );
       if (transaction) {
-        const artifact = await getArtifactFromOptions(name, options);
+        const artifact = await getArtifact(options.contractName || name);
         const abi = artifact.abi;
         const byteCode = linkLibraries(artifact, options.libraries);
         const factory = new ContractFactory(
@@ -358,10 +333,11 @@ export function addHelpers(
     return true;
   }
 
-  async function _deployOne(
+  async function deploy(
     name: string,
     options: DeployOptions
   ): Promise<DeployResult> {
+    await init();
     const argsArray = options.args ? [...options.args] : [];
     options = { ...options, args: argsArray };
     if (options.fieldsToCompare === undefined) {
@@ -390,439 +366,6 @@ export function addHelpers(
     return result;
   }
 
-  function _checkUpgradeIndex(
-    oldDeployment: Deployment | null,
-    upgradeIndex?: number
-  ): DeployResult | undefined {
-    if (typeof upgradeIndex === "undefined") {
-      return;
-    }
-    if (upgradeIndex === 0) {
-      if (oldDeployment) {
-        return { ...oldDeployment, newlyDeployed: false };
-      }
-    } else if (upgradeIndex === 1) {
-      if (!oldDeployment) {
-        throw new Error(
-          "upgradeIndex === 1 : exepects Deployments to already exists"
-        );
-      }
-      if (oldDeployment.history && oldDeployment.history.length > 0) {
-        return { ...oldDeployment, newlyDeployed: false };
-      }
-    } else {
-      if (!oldDeployment) {
-        throw new Error(
-          `upgradeIndex === ${upgradeIndex} : exepects Deployments to already exists`
-        );
-      }
-      if (!oldDeployment.history) {
-        throw new Error(
-          `upgradeIndex > 1 : exepects Deployments history to exists`
-        );
-      } else if (oldDeployment.history.length > upgradeIndex - 1) {
-        return { ...oldDeployment, newlyDeployed: false };
-      } else if (oldDeployment.history.length < upgradeIndex - 1) {
-        throw new Error(
-          `upgradeIndex === ${upgradeIndex} : exepects Deployments history length to be at least ${upgradeIndex -
-            1}`
-        );
-      }
-    }
-  }
-
-  async function _deployViaTransparentProxy(
-    name: string,
-    options: DeployOptions
-  ): Promise<DeployResult> {
-    const oldDeployment = await getDeploymentOrNUll(name);
-    let updateMethod = "postUpgrade";
-    let upgradeIndex;
-    if (typeof options.proxy === "object") {
-      upgradeIndex = options.proxy.upgradeIndex;
-      updateMethod = options.proxy.methodName || updateMethod;
-    }
-    const deployResult = _checkUpgradeIndex(oldDeployment, upgradeIndex);
-    if (deployResult) {
-      return deployResult;
-    }
-    const implementationName = name + "_Implementation";
-    const proxyName = name + "_Proxy";
-
-    const argsArray = options.args ? [...options.args] : [];
-    const implementationOptions = { ...options };
-    delete implementationOptions.proxy;
-    if (!implementationOptions.contract) {
-      implementationOptions.contract = name;
-    }
-
-    const { address: admin } = getProxyAdmin(options);
-
-    const artifact = await getArtifactFromOptions(
-      implementationName,
-      implementationOptions
-    );
-    const constructor = artifact.abi.find(
-      (fragment: { type: string; inputs: any[] }) =>
-        fragment.type === "constructor"
-    );
-    if (!constructor || constructor.inputs.length !== argsArray.length) {
-      delete implementationOptions.args;
-      if (constructor && constructor.inputs.length > 0) {
-        throw new Error(
-          `Proxy based contract constructor can only have either zero argument or the exact same argument as the "${updateMethod}" method.
-Plus they are only used when the contract is meant to be used as standalone when development ends.
-`
-        );
-      }
-    }
-
-    const implementation = await _deployOne(
-      implementationName,
-      implementationOptions
-    );
-    if (implementation.newlyDeployed) {
-      // console.log(`implementation deployed at ${implementation.address} for ${implementation.receipt.gasUsed}`);
-      const implementationContract = new Contract(
-        implementation.address,
-        implementation.abi
-      );
-
-      const { data } = await implementationContract.populateTransaction[
-        updateMethod
-      ](...argsArray);
-
-      let proxy = await getDeploymentOrNUll(proxyName);
-      if (!proxy) {
-        const proxyOptions = { ...options };
-        delete proxyOptions.proxy;
-        proxyOptions.contract = transparentProxy;
-        proxyOptions.args = [implementation.address, data, admin];
-        proxy = await _deployOne(proxyName, proxyOptions);
-        // console.log(`proxy deployed at ${proxy.address} for ${proxy.receipt.gasUsed}`);
-      } else {
-        await execute(
-          proxyName,
-          { ...options },
-          "changeImplementation",
-          implementation.address,
-          data
-        );
-      }
-      const proxiedDeployment = {
-        ...implementation,
-        address: proxy.address,
-        args: argsArray
-      };
-      if (oldDeployment) {
-        proxiedDeployment.history = proxiedDeployment.history
-          ? proxiedDeployment.history.concat([oldDeployment])
-          : [oldDeployment];
-      }
-      await env.deployments.save(name, proxiedDeployment);
-
-      const deployment = await env.deployments.get(name);
-      return {
-        ...deployment,
-        newlyDeployed: true
-      };
-    } else {
-      const deployment = await env.deployments.get(name);
-      return {
-        ...deployment,
-        newlyDeployed: false
-      };
-    }
-  }
-
-  function getProxyAdmin(options: DeployOptions) {
-    let address = options.from; // admim default to msg.sender
-    if (typeof options.proxy === "object") {
-      address = options.proxy.admin || address;
-    }
-    return getFrom(address);
-  }
-
-  function getOptionalFrom(
-    from?: string
-  ): { address?: Address; ethersSigner?: Signer } {
-    return _getFrom(from, true);
-  }
-
-  function getFrom(from?: string): { address: Address; ethersSigner?: Signer } {
-    return _getFrom(from, false) as { address: Address; ethersSigner?: Signer };
-  }
-
-  function _getFrom(
-    from?: string,
-    optional?: boolean
-  ): { address?: Address; ethersSigner?: Signer } {
-    let ethersSigner: Signer | undefined;
-    if (!from) {
-      if (optional) {
-        return {};
-      }
-      throw new Error("no from specified");
-    }
-    if (from.length >= 64) {
-      if (from.length === 64) {
-        from = "0x" + from;
-      }
-      const wallet = new Wallet(from);
-      from = wallet.address;
-      ethersSigner = wallet;
-    } else {
-      if (availableAccounts[from.toLowerCase()]) {
-        ethersSigner = provider.getSigner(from);
-      } else if (!optional) {
-        throw new Error(`no signer for ${from}`);
-      }
-    }
-
-    return { address: from, ethersSigner };
-  }
-
-  interface FacetCut {
-    address: string;
-    sigs: string[];
-  }
-
-  function extractFacetInfo(facetBytes: string): FacetCut {
-    const address = facetBytes.slice(0, 42);
-    const rest = facetBytes.slice(42);
-    const sigs = [];
-    for (let i = 0; i < rest.length; i += 8) {
-      sigs.push("0x" + rest.slice(i, i + 8));
-    }
-    return {
-      address,
-      sigs
-    };
-  }
-
-  function sigsFromABI(abi: any[]): string[] {
-    return abi.map((fragment: any) =>
-      Interface.getSighash(FunctionFragment.from(fragment))
-    );
-  }
-
-  async function _deployViaDiamondProxy(
-    name: string,
-    options: DiamondOptions
-  ): Promise<DeployResult> {
-    const oldDeployment = await getDeploymentOrNUll(name);
-    const deployResult = _checkUpgradeIndex(
-      oldDeployment,
-      options.upgradeIndex
-    );
-    if (deployResult) {
-      return deployResult;
-    }
-
-    const proxyName = name + "_DiamondProxy";
-    const { address: admin, ethersSigner: adminSigner } = getProxyAdmin(
-      options
-    );
-    const diamantaireName = "Diamantaire_" + admin.toLowerCase();
-    const facetSnapshot: FacetCut[] = [];
-    const oldFacets: FacetCut[] = [];
-    if (oldDeployment) {
-      const diamondProxyDeployment = await getDeployment(proxyName);
-      const diamondProxy = new Contract(
-        diamondProxyDeployment.address,
-        diamondProxyDeployment.abi,
-        provider
-      );
-
-      const facetsBytes = await diamondProxy.facets();
-      for (const facetBytes of facetsBytes) {
-        oldFacets.push(extractFacetInfo(facetBytes));
-        // ensure EIP165, LoupeFacet, DiamondOwnershipFacet and DiamondFacet are kept // TODO options to delete cut them out
-        const sigsBytes = facetBytes.slice(42);
-        if (
-          sigsBytes === "01ffc9a7" || // ERC165
-          sigsBytes === "adfca15e7a0ed627cdffacc652ef6b2c" || // Loupe
-          sigsBytes === "99f5f52e" || // DiamoncCut
-          sigsBytes === "f2fde38b" // DiamondOwnership
-        ) {
-          facetSnapshot.push(extractFacetInfo(facetBytes));
-        }
-      }
-    }
-    // console.log({ oldFacets: JSON.stringify(oldFacets, null, "  ") });
-
-    let changesDetected = false;
-    const abi: any[] = [];
-    const facetCuts: FacetCut[] = [];
-    for (const facet of options.facets) {
-      const artifact = await getArtifact(facet); // TODO getArtifactFromOptions( // allowing to pass bytecode / abi
-      const constructor = artifact.abi.find(
-        (fragment: { type: string; inputs: any[] }) =>
-          fragment.type === "constructor"
-      );
-      if (constructor) {
-        throw new Error(`Facet must not have a constructor`);
-      }
-      abi.splice(abi.length, 0, ...artifact.abi); // TODO check overlap : merge
-      // TODO allow facet to be named so multiple version could coexist
-      const implementation = await _deployOne(facet, {
-        from: options.from,
-        log: options.log,
-        libraries: options.libraries
-      });
-      if (implementation.newlyDeployed) {
-        // console.log(`facet ${facet} deployed at ${implementation.address}`);
-        changesDetected = true;
-        const facetCut = {
-          address: implementation.address,
-          sigs: sigsFromABI(implementation.abi)
-        };
-        facetCuts.push(facetCut);
-        facetSnapshot.push(facetCut);
-      } else {
-        const oldImpl = await getDeployment(facet);
-        facetSnapshot.push({
-          address: oldImpl.address,
-          sigs: sigsFromABI(oldImpl.abi)
-        });
-      }
-    }
-
-    for (const oldFacet of oldFacets) {
-      if (
-        !facetSnapshot.find(
-          f => f.address.toLowerCase() === oldFacet.address.toLowerCase()
-        )
-      ) {
-        changesDetected = true;
-        facetCuts.unshift({
-          address: "0x0000000000000000000000000000000000000000",
-          sigs: oldFacet.sigs
-        });
-      }
-    }
-
-    let data = "0x"; // TODO
-    if (options.execute) {
-      const diamondContract = new Contract(
-        "0x0000000000000000000000000000000000000001",
-        abi
-      );
-      const txData = await diamondContract.populateTransaction[
-        options.execute.methodName
-      ](...options.execute.args);
-      data = txData.data || "0x";
-    }
-
-    if (changesDetected) {
-      const cuts = facetCuts.map(facetCut => {
-        return facetCut.sigs.reduce(
-          (prev, curr) => (prev += curr.slice(2)),
-          facetCut.address
-        );
-      });
-      let proxy = await getDeploymentOrNUll(proxyName);
-      if (!proxy) {
-        let diamantaireDeployment = await getDeploymentOrNUll(diamantaireName);
-        if (!diamantaireDeployment) {
-          diamantaireDeployment = await _deployOne(diamantaireName, {
-            from: options.from,
-            contract: diamantaire,
-            args: [admin],
-            log: true
-          });
-        }
-
-        const receipt = await execute(
-          diamantaireName,
-          { ...options, from: admin },
-          "createDiamond",
-          cuts,
-          data
-        );
-        if (!receipt) {
-          throw new Error("could not execute 'createDiamon'");
-        }
-        // console.log(JSON.stringify(receipt, null, "  "));
-        const diamondCreatedEvent =
-          receipt.events &&
-          receipt.events.find(event => event.event === "DiamondCreated");
-        const proxyAddress = diamondCreatedEvent.args.diamond;
-        console.log(`proxy address ${proxyAddress}`);
-        proxy = {
-          abi: diamondBase.abi,
-          address: proxyAddress,
-          receipt,
-          args: [diamantaireDeployment.address],
-          bytecode: diamondBase.bytecode,
-          deployedBytecode: diamondBase.deployedBytecode
-        };
-        await env.deployments.save(proxyName, proxy);
-        await env.deployments.save(name, {
-          ...proxy,
-          linkedData: options.linkedData,
-          facets: facetSnapshot,
-          diamondCuts: cuts,
-          abi
-          // TODO args:
-        });
-      } else {
-        const pastDeployment = await env.deployments.get(name);
-        // console.log(`cutting ${cuts} ...`);
-        await execute(
-          diamantaireName,
-          { ...options, from: admin },
-          "cutAndExecute",
-          proxy.address,
-          cuts,
-          data
-        );
-        await env.deployments.save(name, {
-          ...pastDeployment,
-          history: pastDeployment.history
-            ? pastDeployment.history.concat(pastDeployment)
-            : [pastDeployment],
-          linkedData: options.linkedData,
-          address: proxy.address,
-          abi,
-          facets: facetSnapshot,
-          diamondCuts: cuts,
-          args: [options.admin] // TODO Diamantaire for construct and cut
-        });
-      }
-
-      const deployment = await env.deployments.get(name);
-      return {
-        ...deployment,
-        newlyDeployed: true
-      };
-    } else {
-      const deployment = await env.deployments.get(name);
-      return {
-        ...deployment,
-        newlyDeployed: false
-      };
-    }
-  }
-
-  async function deploy(
-    name: string,
-    options: DeployOptions
-  ): Promise<DeployResult> {
-    await init();
-    if (!options.proxy) {
-      return _deployOne(name, options);
-    }
-    return _deployViaTransparentProxy(name, options);
-  }
-
-  async function diamond(
-    name: string,
-    options: DiamondOptions
-  ): Promise<DeployResult> {
-    return _deployViaDiamondProxy(name, options);
-  }
-
   async function batchExecute(
     txs: Execute[],
     batchOptions: { dev_forceMine: boolean }
@@ -843,7 +386,21 @@ Plus they are only used when the contract is meant to be used as standalone when
       savedTxs.push();
     }
     for (const tx of savedTxs) {
-      const { address: from, ethersSigner } = getFrom(tx.from);
+      let from = tx.from;
+      let ethersSigner;
+      if (from.length >= 64) {
+        if (from.length === 64) {
+          from = "0x" + from;
+        }
+        ethersSigner = new Wallet(from);
+        from = ethersSigner.address;
+      } else {
+        if (availableAccounts[from.toLowerCase()]) {
+          try {
+            ethersSigner = provider.getSigner(from);
+          } catch (e) {}
+        }
+      }
       const nonce =
         tx.nonce ||
         currentNonces[from] ||
@@ -863,7 +420,22 @@ Plus they are only used when the contract is meant to be used as standalone when
 
   async function rawTx(tx: SimpleTx): Promise<Receipt | null> {
     await init();
-    const { address: from, ethersSigner } = getFrom(tx.from);
+    let from = tx.from;
+    let ethersSigner;
+    if (from.length >= 64) {
+      if (from.length === 64) {
+        from = "0x" + from;
+      }
+      ethersSigner = new Wallet(from);
+      from = ethersSigner.address;
+    } else {
+      if (availableAccounts[from.toLowerCase()]) {
+        try {
+          ethersSigner = provider.getSigner(from);
+        } catch (e) {}
+      }
+    }
+
     if (!ethersSigner) {
       console.error("no signer for " + from);
       log("Please execute the following as " + from);
@@ -908,7 +480,21 @@ Plus they are only used when the contract is meant to be used as standalone when
     ...args: any[]
   ): Promise<Receipt | null> {
     await init();
-    const { address: from, ethersSigner } = getFrom(options.from);
+    let from = options.from;
+    let ethersSigner;
+    if (from.length >= 64) {
+      if (from.length === 64) {
+        from = "0x" + from;
+      }
+      ethersSigner = new Wallet(from);
+      from = ethersSigner.address;
+    } else {
+      if (availableAccounts[from.toLowerCase()]) {
+        try {
+          ethersSigner = provider.getSigner(from);
+        } catch (e) {}
+      }
+    }
 
     let tx;
     let unsignedTx;
@@ -976,7 +562,12 @@ Plus they are only used when the contract is meant to be used as standalone when
       });
       await setupGasPrice(overrides);
       const ethersArgs = args ? args.concat([overrides]) : [overrides];
-      tx = await ethersContract.functions[methodName](...ethersArgs);
+      const { data, to } = await ethersContract.populateTransaction[methodName](
+        ...ethersArgs
+      );
+
+      unsignedTx = { ...overrides, data, to };
+      tx = await ethersSigner.sendTransaction(unsignedTx);
     }
 
     tx = await onPendingTx(tx);
@@ -1019,10 +610,17 @@ Plus they are only used when the contract is meant to be used as standalone when
     if (typeof args === "undefined") {
       args = [];
     }
-    let caller: Web3Provider | Signer = provider;
-    const { ethersSigner } = getOptionalFrom(options.from);
-    if (ethersSigner) {
-      caller = ethersSigner;
+    let from = options.from;
+    let ethersSigner;
+    if (from && from.length >= 64) {
+      if (from.length === 64) {
+        from = "0x" + from;
+      }
+      ethersSigner = new Wallet(from);
+      from = ethersSigner.address;
+    }
+    if (!ethersSigner) {
+      ethersSigner = provider; // TODO rename ethersSigner
     }
     const deployment = await env.deployments.get(name);
     if (!deployment) {
@@ -1038,7 +636,7 @@ Plus they are only used when the contract is meant to be used as standalone when
     const ethersContract = new Contract(
       deployment.address,
       abi,
-      caller as Signer
+      ethersSigner as Signer
     );
     // populate function
     // if (options.outputTx) {
@@ -1069,7 +667,6 @@ Plus they are only used when the contract is meant to be used as standalone when
     ...partialExtension,
     fetchIfDifferent,
     deploy,
-    diamond,
     execute,
     batchExecute,
     rawTx,
@@ -1112,7 +709,7 @@ Plus they are only used when the contract is meant to be used as standalone when
     ...args: any[]
   ): Promise<DeployResult> => {
     options.fieldsToCompare = fieldsToCompare;
-    options.contract = contractName;
+    options.contractName = contractName;
     options.args = args;
     return deploy(name, options);
   };
