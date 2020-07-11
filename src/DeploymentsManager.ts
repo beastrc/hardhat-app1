@@ -387,8 +387,13 @@ export class DeploymentsManager {
     if (typeof deployment.receipt === undefined) {
       throw new Error("deployment need a receipt");
     }
-    if (typeof deployment.receipt.contractAddress === undefined) {
-      throw new Error("deployment need a receipt with contractAddress");
+    if (
+      typeof deployment.address === undefined &&
+      typeof deployment.receipt.contractAddress === undefined
+    ) {
+      throw new Error(
+        "deployment need a receipt with contractAddress or an address"
+      );
     }
     if (typeof deployment.abi === undefined) {
       throw new Error("deployment need an ABI");
@@ -420,6 +425,7 @@ export class DeploymentsManager {
       blockHash: receipt.blockHash,
       transactionHash: receipt.transactionHash,
       logs: receipt.logs,
+      events: receipt.events,
       blockNumber: receipt.blockNumber,
       cumulativeGasUsed:
         receipt.cumulativeGasUsed && receipt.cumulativeGasUsed._isBigNumber
@@ -452,6 +458,9 @@ export class DeploymentsManager {
           true
         );
         obj.address = receiptFetched.contractAddress;
+        if (!obj.address) {
+          throw new Error("no contractAddress in receipt");
+        }
       } catch (e) {
         console.error(e);
         if (toSave) {
@@ -554,6 +563,7 @@ export class DeploymentsManager {
       let deployFunc: DeployFunction;
       // console.log("fetching " + scriptFilePath);
       try {
+        // TODO when watch is enabled : delete require.cache[path.resolve(scriptFilePath)]; // ensure we reload it every time, so changes are taken in consideration
         deployFunc = require(scriptFilePath);
         if ((deployFunc as any).default) {
           deployFunc = (deployFunc as any).default as DeployFunction;
