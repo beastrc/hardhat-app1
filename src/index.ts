@@ -2,8 +2,7 @@ import {
   BuidlerNetworkConfig,
   EthereumProvider,
   ResolvedBuidlerConfig,
-  BuidlerRuntimeEnvironment,
-  Deployment
+  BuidlerRuntimeEnvironment
 } from "@nomiclabs/buidler/types";
 import { createProvider } from "@nomiclabs/buidler/internal/core/providers/construction";
 import { lazyObject } from "@nomiclabs/buidler/internal/util/lazy";
@@ -27,7 +26,6 @@ import debug from "debug";
 const log = debug("buidler:wighawag:buidler-deploy");
 
 import { DeploymentsManager } from "./DeploymentsManager";
-import chokidar from "chokidar";
 
 function isBuidlerEVM(bre: BuidlerRuntimeEnvironment): boolean {
   const { network, buidlerArguments, config } = bre;
@@ -101,97 +99,18 @@ export default function() {
       undefined,
       types.string
     )
-    .addFlag("watch", "redeploy on every change of contract or deploy script")
     .setAction(async (args, bre) => {
-      async function compileAndDeploy() {
-        await bre.run("compile");
-        return deploymentsManager.runDeploy(args.tags, {
-          log: args.log,
-          resetMemory: false, // this is memory reset, TODO rename it
-          deletePreviousDeployments: args.reset,
-          writeDeploymentsToFiles: args.write,
-          export: args.export,
-          exportAll: args.exportAll,
-          savePendingTx: args.pendingtx,
-          gasPrice: args.gasprice
-        });
-      }
-
-      let currentPromise: Promise<{
-        [name: string]: Deployment;
-      }> | null = compileAndDeploy();
-      if (args.watch) {
-        const watcher = chokidar.watch(
-          [
-            bre.config.paths.sources,
-            bre.config.paths.deploy || bre.config.paths.root + "/deploy"
-          ],
-          {
-            ignored: /(^|[\/\\])\../, // ignore dotfiles
-            persistent: true
-          }
-        );
-
-        watcher.on("ready", () =>
-          console.log("Initial scan complete. Ready for changes")
-        );
-
-        let rejectPending: any = null;
-        function pending(): Promise<any> {
-          return new Promise((resolve, reject) => {
-            rejectPending = reject;
-            if (currentPromise) {
-              currentPromise
-                .then(() => {
-                  rejectPending = null;
-                  resolve();
-                })
-                .catch(error => {
-                  rejectPending = null;
-                  currentPromise = null;
-                  console.error(error);
-                });
-            } else {
-              rejectPending = null;
-              resolve();
-            }
-          });
-        }
-        watcher.on("change", async (path, stats) => {
-          console.log("change detected");
-          if (currentPromise) {
-            console.log("deployment in progress, please wait ...");
-            if (rejectPending) {
-              // console.log("disabling previously pending redeployments...");
-              rejectPending();
-            }
-            try {
-              // console.log("waiting for current redeployment...");
-              await pending();
-              // console.log("pending finished");
-            } catch (e) {
-              return;
-            }
-          }
-          currentPromise = compileAndDeploy();
-          try {
-            await currentPromise;
-          } catch (e) {
-            console.error(e);
-          }
-          currentPromise = null;
-        });
-        try {
-          await currentPromise;
-        } catch (e) {
-          console.error(e);
-        }
-        currentPromise = null;
-        await new Promise(resolve => setTimeout(resolve, 2000000000)); // TODO better way ?
-      } else {
-        const firstDeployments = await currentPromise;
-        return firstDeployments;
-      }
+      await bre.run("compile");
+      return deploymentsManager.runDeploy(args.tags, {
+        log: args.log,
+        resetMemory: false, // this is memory reset, TODO rename it
+        deletePreviousDeployments: args.reset,
+        writeDeploymentsToFiles: args.write,
+        export: args.export,
+        exportAll: args.exportAll,
+        savePendingTx: args.pendingtx,
+        gasPrice: args.gasprice
+      });
     });
 
   task("deploy", "Deploy contracts")
@@ -217,7 +136,6 @@ export default function() {
       undefined,
       types.string
     )
-    .addFlag("watch", "redeploy on every change of contract or deploy script")
     .setAction(async (args, bre) => {
       if (args.write === undefined) {
         args.write = !isBuidlerEVM(bre);
@@ -272,18 +190,15 @@ export default function() {
       types.boolean
     )
     .addOptionalParam("log", "whether to output log", true, types.boolean)
-    .addFlag("watch", "redeploy on every change of contract or deploy script")
     .setAction(async (args, bre, runSuper) => {
       args.pendingtx = !isBuidlerEVM(bre);
-
+      await bre.run("deploy:run", args);
       // TODO return runSuper(args); and remove the rest (used for now to remove login privateKeys)
       if (!isBuidlerEVM(bre)) {
         throw new BuidlerError(
           ERRORS.BUILTIN_TASKS.JSONRPC_UNSUPPORTED_NETWORK
         );
       }
-
-      let server;
       const { hostname, port } = args;
       try {
         const serverConfig: JsonRpcServerConfig = {
@@ -292,7 +207,7 @@ export default function() {
           provider: _createBuidlerEVMProvider(bre.config)
         };
 
-        server = new JsonRpcServer(serverConfig);
+        const server = new JsonRpcServer(serverConfig);
 
         const { port: actualPort, address } = await server.listen();
 
@@ -301,6 +216,8 @@ export default function() {
             `Started HTTP and WebSocket JSON-RPC server at http://${address}:${actualPort}/`
           )
         );
+
+        await server.waitUntilClosed();
       } catch (error) {
         if (BuidlerError.isBuidlerError(error)) {
           throw error;
@@ -314,7 +231,5 @@ export default function() {
           error
         );
       }
-      await bre.run("deploy:run", args);
-      await server.waitUntilClosed();
     });
 }
