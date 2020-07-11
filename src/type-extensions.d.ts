@@ -1,4 +1,5 @@
 import "@nomiclabs/buidler/types";
+import { boolean } from "@nomiclabs/buidler/internal/core/params/argumentTypes";
 
 declare module "@nomiclabs/buidler/types" {
   export interface BuidlerRuntimeEnvironment {
@@ -23,7 +24,7 @@ declare module "@nomiclabs/buidler/types" {
   }
 
   export interface DeployFunction {
-    (env: BuidlerRuntimeEnvironment): Promise<void>;
+    (env: BuidlerRuntimeEnvironment): Promise<undefined | boolean>;
     skip?: (env: BuidlerRuntimeEnvironment) => Promise<boolean>;
     tags?: string[];
     dependencies?: string[];
@@ -58,19 +59,48 @@ declare module "@nomiclabs/buidler/types" {
     cumulativeGasUsed: BigNumber | string | number;
     gasUsed: BigNumber | string | number;
     logs?: Log[];
+    events?: any[];
     logsBloom?: string;
     byzantium?: boolean;
     status?: number;
     confirmations?: number;
   };
 
+  export type DiamondFacets = Array<string>; // TODO support Object for facet : {contract} // could be deploymentNames too ? or {abi,address}
+  export interface DiamondOptions extends TxOptions {
+    owner?: Address;
+    facets: DiamondFacets;
+    log?: boolean;
+    libraries?: { [libraryName: string]: Address };
+    linkedData?: any; // JSONable ?
+    upgradeIndex?: number;
+    execute?: {
+      methodName: string;
+      args: any[];
+    };
+  }
+
+  export interface ProxyOptions {
+    owner?: Address;
+    upgradeIndex?: number;
+    methodName?: string;
+  }
+
   export interface DeployOptions extends TxOptions {
-    contractName?: string;
+    contract?:
+      | string
+      | {
+          abi: ABI;
+          bytecode: string;
+          deployedBytecode?: string;
+        };
     args?: any[];
     fieldsToCompare?: string | string[];
+    skipIfAlreadyDeployed?: boolean;
     log?: boolean;
     linkedData?: any; // JSONable ?
-    libraries?: {[libraryName: string]: Address}
+    libraries?: { [libraryName: string]: Address };
+    proxy?: boolean | ProxyOptions; // TODO support different type of proxies ?
   }
 
   export interface CallOptions {
@@ -111,12 +141,12 @@ declare module "@nomiclabs/buidler/types" {
   }
 
   export type Json =
-  | null
-  | boolean
-  | number
-  | string
-  | Json[]
-  | { [prop: string]: Json };
+    | null
+    | boolean
+    | number
+    | string
+    | Json[]
+    | { [prop: string]: Json };
 
   // from https://github.com/Microsoft/TypeScript/issues/1897#issuecomment-580962081
   type JsonCompatible<T> = {
@@ -129,10 +159,14 @@ declare module "@nomiclabs/buidler/types" {
       : JsonCompatible<T[P]>;
   };
 
-  export type FixtureFunc = (env: BuidlerRuntimeEnvironment, options? : Json) => Promise<any>;
+  export type FixtureFunc = (
+    env: BuidlerRuntimeEnvironment,
+    options?: Json
+  ) => Promise<any>;
 
   export interface DeploymentsExtension {
     deploy(name: string, options: DeployOptions): Promise<DeployResult>;
+    diamond(name: string, options: DiamondOptions): Promise<DeployResult>;
     fetchIfDifferent(name: string, options: DeployOptions): Promise<boolean>;
     save(name: string, deployment: DeploymentSubmission): Promise<void>;
     get(name: string): Promise<Deployment>;
@@ -204,29 +238,39 @@ declare module "@nomiclabs/buidler/types" {
     abi: ABI;
     receipt: Receipt;
     address?: Address; // used to override receipt.contractAddress (useful for proxies)
+    history?: Deployment[];
     args?: any[];
     linkedData?: any;
     solidityJson?: any; // TODO solidityJson type
     solidityMetadata?: string;
     bytecode?: string;
     deployedBytecode?: string;
-    userdoc: any;
-    devdoc: any;
-    methodIdentifiers: any;
+    userdoc?: any;
+    devdoc?: any;
+    methodIdentifiers?: any;
+    diamondCuts?: string[];
+    facets?: { address: string; sigs: string[] }[];
+    execute?: {
+      methodName: string;
+      args: any[];
+    };
   }
 
   export interface Deployment {
     abi: ABI;
     address: Address;
     receipt: Receipt;
+    history?: Deployment[];
     args?: any[];
     linkedData?: any;
     solidityJson?: any; // TODO solidityJson type
     solidityMetadata?: string;
     bytecode?: string;
     deployedBytecode?: string;
-    userdoc: any;
-    devdoc: any;
-    methodIdentifiers: any;
+    userdoc?: any;
+    devdoc?: any;
+    methodIdentifiers?: any;
+    diamondCuts?: string[];
+    facets?: { address: string; sigs: string[] }[];
   }
 }
