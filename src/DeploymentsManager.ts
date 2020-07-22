@@ -15,7 +15,10 @@ import fs from "fs-extra";
 import path from "path";
 
 import { BigNumber } from "@ethersproject/bignumber";
-import { parse as parseTransaction } from "@ethersproject/transactions";
+import {
+  parse as parseTransaction,
+  Transaction
+} from "@ethersproject/transactions";
 
 import debug from "debug";
 const log = debug("buidler:wighawag:buidler-deploy");
@@ -58,6 +61,7 @@ export class DeploymentsManager {
     pendingTransactions: { [hash: string]: any };
     savePendingTx: boolean;
     gasPrice?: string;
+    migrations: { [filename: string]: number };
   };
 
   private env: BuidlerRuntimeEnvironment;
@@ -70,6 +74,7 @@ export class DeploymentsManager {
       namedAccounts: {},
       deploymentsLoaded: false,
       deployments: {},
+      migrations: {},
       writeDeploymentsToFiles: false,
       fixtureCounter: 0,
       snapshotCounter: 0,
@@ -267,6 +272,20 @@ export class DeploymentsManager {
         name: string;
         deployment?: any;
         rawTx: string;
+        decoded: {
+          from: string;
+          gasPrice: string;
+          gasLimit: string;
+          to: string;
+          value: string;
+          nonce: number;
+          data: string;
+          r: string;
+          s: string;
+          v: number;
+          // creates: tx.creates, // TODO test
+          chainId: number;
+        };
       };
     } = {};
     const chainId = await getChainId(this.env);
@@ -281,13 +300,40 @@ export class DeploymentsManager {
     const txHashes = Object.keys(pendingTxs);
     for (const txHash of txHashes) {
       const txData = pendingTxs[txHash];
-      const tx = parseTransaction(txData.rawTx);
-      // if (this.db.gasPrice) {
-      //   if (tx.gasPrice.lt(this.db.gasPrice)) {
-      //     //TODO
-      //   }
-      // }
-      // alternative add options to deploy task to delete pending tx, combined with --gasprice this would work (except for timing edge case)
+      if (txData.rawTx || txData.decoded) {
+        let tx: Transaction;
+        if (txData.rawTx) {
+          tx = parseTransaction(txData.rawTx);
+        } else {
+          function recode(decoded: any): Transaction {
+            return {
+              from: decoded.from,
+              gasPrice: BigNumber.from(decoded.from),
+              gasLimit: BigNumber.from(decoded.gasLimit),
+              to: decoded.to,
+              value: BigNumber.from(decoded.value),
+              nonce: decoded.nonce,
+              data: decoded.data,
+              r: decoded.r,
+              s: decoded.s,
+              v: decoded.v,
+              // creates: tx.creates, // TODO test
+              chainId: decoded.chainId
+            };
+          }
+          tx = recode(txData.decoded);
+        }
+        if (this.db.gasPrice) {
+          if (tx.gasPrice.lt(this.db.gasPrice)) {
+            //TODO
+            console.log("TODO : resubmit tx with higher gas price");
+            console.log(tx);
+          }
+        }
+        // alternative add options to deploy task to delete pending tx, combined with --gasprice this would work (except for timing edge case)
+      } else {
+        console.error(`no access to raw data for tx ${txHash}`);
+      }
       if (this.db.logEnabled) {
         console.log(
           `waiting for tx ${txHash}` +
@@ -324,9 +370,26 @@ export class DeploymentsManager {
       // console.log("tx", tx.hash);
       const pendingTxPath = path.join(deployFolderPath, ".pendingTransactions");
       fs.ensureDirSync(deployFolderPath);
+      const rawTx = tx.raw;
+      const decoded = tx.raw
+        ? undefined
+        : {
+            from: tx.from,
+            gasPrice: tx.from.toString(),
+            gasLimit: tx.gasLimit.toString(),
+            to: tx.to,
+            value: tx.value.toString(),
+            nonce: tx.nonce,
+            data: tx.data,
+            r: tx.r,
+            s: tx.s,
+            v: tx.v,
+            // creates: tx.creates, // TODO test
+            chainId: tx.chainId
+          };
       this.db.pendingTransactions[tx.hash] = name
-        ? { name, deployment, rawTx: tx.raw }
-        : {};
+        ? { name, deployment, rawTx, decoded }
+        : { rawTx, decoded };
       fs.writeFileSync(
         pendingTxPath,
         JSON.stringify(this.db.pendingTransactions, null, "  ")
@@ -335,6 +398,7 @@ export class DeploymentsManager {
       const wait = tx.wait.bind(tx);
       tx.wait = async () => {
         const receipt = await wait();
+        // console.log("checking pending tx...");
         delete this.db.pendingTransactions[tx.hash];
         if (Object.keys(this.db.pendingTransactions).length === 0) {
           fs.removeSync(pendingTxPath);
@@ -363,21 +427,34 @@ export class DeploymentsManager {
   public async loadDeployments(): Promise<{ [name: string]: Deployment }> {
     const chainId = await getChainId(this.env);
     // this.env.deployments.chainId = chainId;
-    addDeployments(
-      this.db,
-      this.deploymentsPath,
-      this.getDeploymentsSubPath(chainId)
-    );
+    const folderPath = this.getDeploymentsSubPath(chainId);
+    let migrations = {};
+    try {
+      log("loading migrations");
+      migrations = JSON.parse(
+        fs
+          .readFileSync(
+            path.join(this.deploymentsPath, folderPath, ".migrations.json")
+          )
+          .toString()
+      );
+    } catch (e) {}
+    this.db.migrations = migrations;
+    // console.log({ migrations: this.db.migrations });
+    addDeployments(this.db, this.deploymentsPath, folderPath);
     this.db.deploymentsLoaded = true;
     return this.db.deployments;
   }
 
   public async deletePreviousDeployments(): Promise<void> {
     const chainId = await getChainId(this.env);
-    deleteDeployments(
-      this.deploymentsPath,
-      this.getDeploymentsSubPath(chainId)
-    );
+    const folderPath = this.getDeploymentsSubPath(chainId);
+    try {
+      fs.removeSync(
+        path.join(this.deploymentsPath, folderPath, ".migrations.json")
+      );
+    } catch (e) {}
+    deleteDeployments(this.deploymentsPath, folderPath);
   }
 
   public async saveDeployment(
@@ -387,8 +464,13 @@ export class DeploymentsManager {
     if (typeof deployment.receipt === undefined) {
       throw new Error("deployment need a receipt");
     }
-    if (typeof deployment.receipt.contractAddress === undefined) {
-      throw new Error("deployment need a receipt with contractAddress");
+    if (
+      typeof deployment.address === undefined &&
+      typeof deployment.receipt.contractAddress === undefined
+    ) {
+      throw new Error(
+        "deployment need a receipt with contractAddress or an address"
+      );
     }
     if (typeof deployment.abi === undefined) {
       throw new Error("deployment need an ABI");
@@ -420,6 +502,7 @@ export class DeploymentsManager {
       blockHash: receipt.blockHash,
       transactionHash: receipt.transactionHash,
       logs: receipt.logs,
+      events: receipt.events,
       blockNumber: receipt.blockNumber,
       cumulativeGasUsed:
         receipt.cumulativeGasUsed && receipt.cumulativeGasUsed._isBigNumber
@@ -440,8 +523,12 @@ export class DeploymentsManager {
         solidityMetadata: deployment.solidityMetadata,
         bytecode: deployment.bytecode,
         deployedBytecode: deployment.deployedBytecode,
-        userdoc: deployment.userdoc,
+        facets: deployment.facets,
+        diamondCuts: deployment.diamondCuts,
+        execute: deployment.execute,
+        history: deployment.history,
         devdoc: deployment.devdoc,
+        userdoc: deployment.userdoc,
         storageLayout: deployment.storageLayout
       })
     );
@@ -455,6 +542,9 @@ export class DeploymentsManager {
           true
         );
         obj.address = receiptFetched.contractAddress;
+        if (!obj.address) {
+          throw new Error("no contractAddress in receipt");
+        }
       } catch (e) {
         console.error(e);
         if (toSave) {
@@ -507,15 +597,23 @@ export class DeploymentsManager {
     }
   ): Promise<{ [name: string]: Deployment }> {
     log("runDeploy");
+    const chainId = await getChainId(this.env);
+    await this.loadDeployments();
+    const deploymentFolderPath = this.getDeploymentsSubPath(chainId);
     const wasWrittingToFiles = this.db.writeDeploymentsToFiles;
     this.db.writeDeploymentsToFiles = options.writeDeploymentsToFiles;
     this.db.savePendingTx = options.savePendingTx;
     this.db.logEnabled = options.log;
     this.db.gasPrice = options.gasPrice;
     if (options.resetMemory) {
+      log("reseting memory");
       this.db.deployments = {};
+      this.db.migrations = {};
     }
     if (options.deletePreviousDeployments) {
+      log("deleting previous deployments");
+      this.db.deployments = {};
+      this.db.migrations = {};
       await this.deletePreviousDeployments();
     } else {
       if (options.savePendingTx) {
@@ -557,6 +655,7 @@ export class DeploymentsManager {
       let deployFunc: DeployFunction;
       // console.log("fetching " + scriptFilePath);
       try {
+        // TODO when watch is enabled : delete require.cache[path.resolve(scriptFilePath)]; // ensure we reload it every time, so changes are taken in consideration
         deployFunc = require(scriptFilePath);
         if ((deployFunc as any).default) {
           deployFunc = (deployFunc as any).default as DeployFunction;
@@ -653,6 +752,13 @@ export class DeploymentsManager {
 
     try {
       for (const deployScript of scriptsToRun.concat(scriptsToRunAtTheEnd)) {
+        const filename = path.basename(deployScript.filePath);
+        if (this.db.migrations[filename]) {
+          log(
+            `skipping ${filename} as migrations already executed and complete`
+          );
+          continue;
+        }
         let skip = false;
         if (deployScript.func.skip) {
           log(`should we skip  ${deployScript.filePath} ?`);
@@ -671,8 +777,9 @@ export class DeploymentsManager {
         }
         if (!skip) {
           log(`executing  ${deployScript.filePath}`);
+          let result;
           try {
-            await deployScript.func(this.env);
+            result = await deployScript.func(this.env);
           } catch (e) {
             // console.error("execution failed", e);
             throw new Error(
@@ -683,6 +790,31 @@ export class DeploymentsManager {
             );
           }
           log(`executing ${deployScript.filePath} complete`);
+          if (result && typeof result === "boolean") {
+            this.db.migrations[filename] = Math.floor(Date.now() / 1000);
+            // TODO refactor to extract this whole path and folder existence stuff
+            const toSave =
+              this.db.writeDeploymentsToFiles &&
+              this.env.network.saveDeployments;
+            if (toSave) {
+              try {
+                fs.mkdirSync(this.deploymentsPath);
+              } catch (e) {}
+              try {
+                fs.mkdirSync(
+                  path.join(this.deploymentsPath, deploymentFolderPath)
+                );
+              } catch (e) {}
+              fs.writeFileSync(
+                path.join(
+                  this.deploymentsPath,
+                  deploymentFolderPath,
+                  ".migrations.json"
+                ),
+                JSON.stringify(this.db.migrations)
+              );
+            }
+          }
         }
       }
     } catch (e) {
@@ -692,7 +824,6 @@ export class DeploymentsManager {
     this.db.writeDeploymentsToFiles = wasWrittingToFiles;
     log("deploy scripts complete");
 
-    const chainId = await getChainId(this.env);
     if (options.exportAll !== undefined) {
       log("load all deployments for export-all");
       const all = loadAllDeployments(this.deploymentsPath, true);
