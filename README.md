@@ -78,18 +78,16 @@ You might want to switch your current deployment process to use buidler-deploy. 
 
 In order to port them to buidler-deploy, you'll need to create one `.json` file per contract in the `deployments/<network>` folder.
 
-The network folder is the concatenation of the buidler network name (as configured in buidler.config.js) (accessible at runtime via `bre.network.name`) with the chainId (as decimal string).
+The network folder is simply the buidler network name (as configured in buidler.config.js) (accessible at runtime via `bre.network.name`).
+Such folder need to have a file named `.chainId` containing the chainId as decimal
 
-So in plain js:
+For example for a rinkeby the file `deployments/rinkeby/.chainId` would be
 
-```js
-const folderPath = "deployments/" + networkName + "_" + chainId;
+```
+4
 ```
 
-Now there are special case for common chain (taken from [chain.network]()) where the chainId is implicit. These are
-the following : `mainnet` (or `eth`), `ropsten`, `rinkeby`, `goerli`, `kovan`
-
-In these cases, if the network match these, then the folderPath is simply `"deployments/" + networkName`.
+Note, prior to buidler 0.6 the chainId was appended to the folder name (expect for some known network name). This has changed and upgrading to 0.6 will require you to change the folder name and add the '.chainId' file.
 
 Each contract file must follow this type (as defined in [src/type-extensions.d.ts](src/type-extensions.d.ts)) :
 
@@ -173,7 +171,7 @@ This plugin adds the _deploy_ task to Buidler.
 
 This task will execute the scripts in the `deploy` folder and save the contract deployments to disk. These deployments are supposed to be saved for example in a git repository. This way they can be accessed later.
 
-With the deployemnt saved, it allows you to deploy a contract only if changed were made.
+With the deployment saved, it allows you to deploy a contract only if changed were made.
 
 Deploy scripts (also called Deploy functions) can also perform aribtrary logic.
 
