@@ -5,115 +5,68 @@ pragma experimental ABIEncoderV2;
 /******************************************************************************\
 * Author: Nick Mudge
 *
-* Implementation of an example of a diamond.
+* Implementation of Diamond facet.
+* This is gas optimized by reducing storage reads and storage writes.
+* This code is as complex as it is to reduce gas costs.
 /******************************************************************************/
 
-import "./OwnershipFacet.sol";
 import "./DiamondStorageContract.sol";
 import "./DiamondHeaders.sol";
-import "./DiamondFacet.sol";
-import "./DiamondLoupeFacet.sol";
 
-contract Diamond is IERC173Events, IERC165, DiamondStorageContract, DiamondFacet {
+contract DiamondFacet is IDiamond, DiamondStorageContract {
+    bytes32 constant CLEAR_ADDRESS_MASK = 0x0000000000000000000000000000000000000000ffffffffffffffffffffffff;
+    bytes32 constant CLEAR_SELECTOR_MASK = 0xffffffff00000000000000000000000000000000000000000000000000000000;
 
-    constructor(address owner) payable {
-        DiamondStorage storage ds = diamondStorage();
-        ds.contractOwner = owner;
-        emit OwnershipTransferred(address(0), owner);
-
-        // Create a DiamondFacet contract which implements the Diamond interface
-        DiamondFacet diamondFacet = new DiamondFacet();
-
-        // Create a DiamondLoupeFacet contract which implements the Diamond Loupe interface
-        DiamondLoupeFacet diamondLoupeFacet = new DiamondLoupeFacet();
-
-        // Create a OwnershipFacet contract which implements the ERC-173 Ownership interface
-        OwnershipFacet ownershipFacet = new OwnershipFacet();
-
-        bytes[] memory cut = new bytes[](4);
-
-        // Adding cut function
-        cut[0] = abi.encodePacked(
-            diamondFacet,
-            IDiamond.diamondCut.selector
-        );
-
-        // Adding diamond loupe functions
-        cut[1] = abi.encodePacked(
-            diamondLoupeFacet,
-            IDiamondLoupe.facetFunctionSelectors.selector,
-            IDiamondLoupe.facets.selector,
-            IDiamondLoupe.facetAddress.selector,
-            IDiamondLoupe.facetAddresses.selector
-        );
-
-        // Adding diamond ERC173 functions
-        cut[2] = abi.encodePacked(
-            ownershipFacet,
-            IERC173.transferOwnership.selector,
-            IERC173.owner.selector
-        );
-
-        // Adding supportsInterface function
-        cut[3] = abi.encodePacked(address(this), IERC165.supportsInterface.selector);
-
-         // execute non-standard internal diamondCut function to add functions
-        diamondCut(cut);
-        
-        // adding ERC165 data
-        // ERC165
-        ds.supportedInterfaces[IERC165.supportsInterface.selector] = true;
-
-        // DiamondCut
-        ds.supportedInterfaces[IDiamond.diamondCut.selector] = true;
-
-        // DiamondLoupe
-        bytes4 interfaceID = IDiamondLoupe.facets.selector ^
-            IDiamondLoupe.facetFunctionSelectors.selector ^
-            IDiamondLoupe.facetAddresses.selector ^
-            IDiamondLoupe.facetAddress.selector;
-        ds.supportedInterfaces[interfaceID] = true;
-
-        // ERC173
-        ds.supportedInterfaces[IERC173.transferOwnership.selector ^
-            IERC173.owner.selector] = true;
-    }
-
-    // This is an immutable functions because it is defined directly in the diamond.
-    // Why is it here instead of in a facet?  No reason, just to show an immutable function.
-    // This implements ERC-165.
-    function supportsInterface(bytes4 _interfaceID) external override view returns (bool) {
-        DiamondStorage storage ds = diamondStorage();
-        return ds.supportedInterfaces[_interfaceID];
-    }
-
-    // Find facet for function that is called and execute the
-    // function if a facet is found and return any value.
-    fallback() external payable {
-        DiamondStorage storage ds;
-        bytes32 position = DiamondStorageContract.DIAMOND_STORAGE_POSITION;
-        assembly { ds.slot := position }
-        address facet = address(bytes20(ds.facets[msg.sig]));  
-        require(facet != address(0));      
-        assembly {            
-            calldatacopy(0, 0, calldatasize())
-            let result := delegatecall(gas(), facet, 0, calldatasize(), 0, 0)            
-            returndatacopy(0, 0, returndatasize())
-            switch result
-            case 0 {revert(0, returndatasize())}
-            default {return (0, returndatasize())}
+    // Standard diamondCut external function
+    function diamondCut(bytes[] calldata _diamondCut, address _init, bytes calldata _calldata) external override {        
+        externalCut(_diamondCut);        
+        if(_calldata.length > 0) {
+            address init = _init == address(0)? address(this) : _init;
+            // Check that init has contract code
+            uint contractSize;
+            assembly { contractSize := extcodesize(init) }
+            require(contractSize > 0, "DiamondFacet: _init address has no code");
+            (bool success, bytes memory error) = init.delegatecall(_calldata);
+            if(!success) {
+                if(error.length > 0) {
+                    // bubble up the error
+                    assembly {
+                        let errorSize := mload(error)
+                        revert(add(32, error), errorSize)
+                    }
+                }
+                else {
+                    revert("DiamondFacet: _init function reverted");
+                }
+            }                        
         }
+        else if(_init != address(0)) {
+            revert("DiamondFacet: _calldata is empty");
+        }                       
+        emit DiamondCut(_diamondCut, _init, _calldata);
     }
 
-    receive() external payable {}
+    // This struct is used to prevent getting the error "CompilerError: Stack too deep, try removing local variables."
+    // See this article: https://medium.com/1milliondevs/compilererror-stack-too-deep-try-removing-local-variables-solved-a6bcecc16231
+    struct SlotInfo {
+        uint originalSelectorSlotsLength;
+        bytes32 selectorSlot;
+        uint oldSelectorSlotsIndex;
+        uint oldSelectorSlotIndex;
+        bytes32 oldSelectorSlot;
+        bool updateLastSlot;
+    }
 
-    // Non-standard internal function version of diamondCut 
-    // This code is exaclty the same as externalCut in DiamondFacet, except it allows anyone to call it (internally) and is using
-    // 'bytes[] memory _diamondCut' instead of 'bytes[] calldata _diamondCut'
+
+    // diamondCut helper function
+    // This code is exaclty the same as the internal diamondCut function, 
+    // except it is using 'bytes[] calldata _diamondCut' instead of 
+    // 'bytes[] memory _diamondCut'
     // The code is duplicated to prevent copying calldata to memory which
     // causes an error for an array of bytes arrays.
-    function diamondCut(bytes[] memory _diamondCut) internal {
+    function externalCut(bytes[] calldata _diamondCut) internal {
         DiamondStorage storage ds = diamondStorage();
+        require(msg.sender == ds.contractOwner, "Must own the contract.");
         SlotInfo memory slot;
         slot.originalSelectorSlotsLength = ds.selectorSlotsLength;
         uint selectorSlotsLength = uint128(slot.originalSelectorSlotsLength);
@@ -220,6 +173,5 @@ contract Diamond is IERC173Events, IERC165, DiamondStorageContract, DiamondFacet
         if(slot.updateLastSlot && selectorSlotLength > 0) {
             ds.selectorSlots[selectorSlotsLength] = slot.selectorSlot;
         }        
-        emit DiamondCut(_diamondCut, address(0), new bytes(0));
     }
 }
