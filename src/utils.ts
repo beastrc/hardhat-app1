@@ -27,22 +27,12 @@ export async function getChainId(hre: HardhatRuntimeEnvironment): Promise<string
   return chainId;
 }
 
-function getOldArtifactSync(name: string, folderPath: string): ExtendedArtifact | undefined {
-  const oldArtifactPath = path.join(folderPath, name + '.json');
-  let artifact;
-  if (fs.existsSync(oldArtifactPath)) {
-    try {
-      artifact = JSON.parse(fs.readFileSync(oldArtifactPath).toString());
-    } catch (e) {
-      console.error(e);
-    }
-  }
-  return artifact;
-}
-
 export function getArtifactFromFolderSync(name: string, folderPath: string): Artifact | undefined {
   const artifacts = new Artifacts(folderPath);
-  let artifact = getOldArtifactSync(name, folderPath);
+  let artifact;
+  try {
+    artifact = JSON.parse(fs.readFileSync(path.join(folderPath, name + '.json')).toString());
+  } catch (e) {}
   if (!artifact) {
     try {
       artifact = artifacts.readArtifactSync(name);
@@ -57,7 +47,10 @@ export async function getArtifactFromFolder(name: string, folderPath: string): P
 
 export function getExtendedArtifactFromFolderSync(name: string, folderPath: string): ExtendedArtifact | undefined {
   const artifacts = new Artifacts(folderPath);
-  let artifact = getOldArtifactSync(name, folderPath);
+  let artifact;
+  try {
+    artifact = JSON.parse(fs.readFileSync(path.join(folderPath, name + '.json')).toString());
+  } catch (e) {}
   if (!artifact) {
     try {
       artifact = artifacts.readArtifactSync(name);
@@ -99,22 +92,7 @@ export async function getExtendedArtifactFromFolder(
   name: string,
   folderPath: string
 ): Promise<ExtendedArtifact | undefined> {
-  const artifacts = new Artifacts(folderPath);
-  let artifact = getOldArtifactSync(name, folderPath);
-  if (!artifact && (await artifacts.artifactExists(name))) {
-    artifact = await artifacts.readArtifact(name);
-    const fullyQualifiedName = artifact.sourceName + ':' + name;
-    const buildInfo = await artifacts.getBuildInfo(fullyQualifiedName);
-    if (buildInfo) {
-      artifact = {
-        ...artifact,
-        ...buildInfo.output.contracts[artifact.sourceName][name],
-        solcInput: JSON.stringify(buildInfo.input, null, '  '),
-        solcInputHash: path.basename(buildInfoFilePath, '.json'),
-      };
-    }
-  }
-  return artifact;
+  return getExtendedArtifactFromFolderSync(name, folderPath);
 }
 
 export function loadAllDeployments(
@@ -132,10 +110,7 @@ export function loadAllDeployments(
       let chainIdFound: string;
       const chainIdFilepath = path.join(fPath, '.chainId');
       if (fs.existsSync(chainIdFilepath)) {
-        chainIdFound = fs
-          .readFileSync(chainIdFilepath)
-          .toString()
-          .trim();
+        chainIdFound = fs.readFileSync(chainIdFilepath).toString().trim();
         name = fileName;
       } else {
         throw new Error(
@@ -205,10 +180,7 @@ function loadDeployments(
     if (expectedChainId) {
       const chainIdFilepath = path.join(deployPath, '.chainId');
       if (fs.existsSync(chainIdFilepath)) {
-        const chainIdFound = fs
-          .readFileSync(chainIdFilepath)
-          .toString()
-          .trim();
+        const chainIdFound = fs.readFileSync(chainIdFilepath).toString().trim();
         if (expectedChainId !== chainIdFound) {
           throw new Error(
             `Loading deployment in folder '${deployPath}' (with chainId: ${chainIdFound}) for a different chainId (${expectedChainId})`
@@ -381,7 +353,7 @@ export function processNamedAccounts(
   }
 }
 
-export const traverse = function(
+export const traverse = function (
   dir: string,
   result: any[] = [],
   topDir?: string,
