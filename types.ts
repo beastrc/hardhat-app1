@@ -249,20 +249,10 @@ export type MultiExport = {
 
 export type Libraries = {[libraryName: string]: Address};
 
-export enum FacetCutAction {
-  Add,
-  Replace,
-  Remove,
-}
-
-export type FacetCut = Facet & {
-  action: FacetCutAction;
-};
-
-export type Facet = {
+export interface FacetCut {
   facetAddress: string;
   functionSelectors: string[];
-};
+}
 
 export interface DeploymentSubmission {
   abi: ABI;
@@ -282,7 +272,7 @@ export interface DeploymentSubmission {
   devdoc?: any;
   methodIdentifiers?: any;
   diamondCut?: FacetCut[];
-  facets?: Facet[];
+  facets?: FacetCut[];
   execute?: {
     methodName: string;
     args: any[];
@@ -314,7 +304,7 @@ export interface Deployment {
   devdoc?: any;
   methodIdentifiers?: any;
   diamondCut?: FacetCut[];
-  facets?: Facet[];
+  facets?: FacetCut[];
   storageLayout?: any;
   gasEstimates?: any;
 }
