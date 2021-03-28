@@ -29,13 +29,15 @@ import {
   FacetCut,
   DeploymentSubmission,
   ExtendedArtifact,
-  FacetCutAction,
-  Facet,
+  ArtifactData,
 } from '../types';
 import {PartialExtension} from './internal/types';
 import {UnknownSignerError} from './errors';
 import {mergeABIs} from './utils';
 
+import OpenZeppelinTransparentProxy from '../extendedArtifacts/TransparentUpgradeableProxy.json';
+import OptimizedTransparentUpgradeableProxy from '../extendedArtifacts/OptimizedTransparentUpgradeableProxy.json';
+import TransaparentProxyAdmin from '../extendedArtifacts/ProxyAdmin.json';
 import eip173Proxy from '../extendedArtifacts/EIP173Proxy.json';
 import eip173ProxyWithReceive from '../extendedArtifacts/EIP173ProxyWithReceive.json';
 import diamondBase from '../extendedArtifacts/Diamond.json';
@@ -777,14 +779,20 @@ export function addHelpers(
     }
   }
 
+  // TODO rename
   async function _deployViaEIP173Proxy(
     name: string,
     options: DeployOptions
   ): Promise<DeployResult> {
     const oldDeployment = await getDeploymentOrNUll(name);
-    let updateMethod;
+    let updateMethod: string | undefined;
     let upgradeIndex;
     let proxyContract: ExtendedArtifact = eip173Proxy;
+    let proxyContractType = 'default';
+    let viaAdminContract:
+      | string
+      | {name: string; artifact?: string | ArtifactData}
+      | undefined;
     if (typeof options.proxy === 'object') {
       upgradeIndex = options.proxy.upgradeIndex;
       updateMethod = options.proxy.methodName;
@@ -800,13 +808,37 @@ export function addHelpers(
               proxyContract = eip173ProxyWithReceive;
             } else if (options.proxy.proxyContract === 'EIP173Proxy') {
               proxyContract = eip173Proxy;
+            } else if (
+              options.proxy.proxyContract === 'OpenZeppelinTransparentProxy'
+            ) {
+              proxyContract = OpenZeppelinTransparentProxy;
+              proxyContractType = 'transparent';
+              viaAdminContract = 'TransaparentProxyAdmin';
+            } else if (
+              options.proxy.proxyContract === 'OptimizedTransparentProxy'
+            ) {
+              proxyContract = OptimizedTransparentUpgradeableProxy;
+              proxyContractType = 'transparent';
+              viaAdminContract = 'TransaparentProxyAdmin';
             } else {
               throw new Error(
                 `no contract found for ${options.proxy.proxyContract}`
               );
             }
           }
+        } else {
+          proxyContractType = options.proxy.proxyContract.type || 'default';
+          if (typeof options.proxy.proxyContract.artifact === 'string') {
+            proxyContract = await env.deployments.getExtendedArtifact(
+              options.proxy.proxyContract.artifact
+            );
+          } else {
+            proxyContract = options.proxy.proxyContract.artifact;
+          }
         }
+      }
+      if (options.proxy.viaAdminContract) {
+        viaAdminContract = options.proxy.viaAdminContract;
       }
     } else if (typeof options.proxy === 'string') {
       updateMethod = options.proxy;
@@ -857,6 +889,91 @@ Plus they are only used when the contract is meant to be used as standalone when
         );
       }
     }
+
+    if (updateMethod) {
+      const updateMethodFound = artifact.abi.find(
+        (fragment: {type: string; inputs: any[]; name: string}) =>
+          fragment.type === 'function' && fragment.name === updateMethod
+      );
+      if (!updateMethodFound) {
+        throw new Error(`contract need to implement function ${updateMethod}`);
+      }
+    }
+
+    let proxyAdminName: string | undefined;
+    let proxyAdmin = owner;
+    let currentProxyAdminOwner: string | undefined;
+    let proxyAdminDeployed: Deployment | undefined;
+    if (viaAdminContract) {
+      let proxyAdminArtifactNameOrContract: string | ArtifactData | undefined;
+      if (typeof viaAdminContract === 'string') {
+        proxyAdminName = viaAdminContract;
+        proxyAdminArtifactNameOrContract = viaAdminContract;
+      } else {
+        proxyAdminName = viaAdminContract.name;
+        if (!viaAdminContract.artifact) {
+          proxyAdminDeployed = await env.deployments.get(proxyAdminName);
+        }
+        proxyAdminArtifactNameOrContract = viaAdminContract.artifact;
+      }
+
+      let proxyAdminContract: ExtendedArtifact | undefined;
+      if (typeof proxyAdminArtifactNameOrContract === 'string') {
+        try {
+          proxyAdminContract = await env.deployments.getExtendedArtifact(
+            proxyAdminArtifactNameOrContract
+          );
+        } catch (e) {}
+
+        if (!proxyAdminContract) {
+          if (
+            proxyContractType === 'transparent' &&
+            viaAdminContract === 'TransaparentProxyAdmin'
+          ) {
+            proxyAdminContract = TransaparentProxyAdmin;
+          } else {
+            throw new Error(
+              `no contract found for ${proxyAdminArtifactNameOrContract}`
+            );
+          }
+        }
+      } else {
+        proxyAdminContract = proxyAdminArtifactNameOrContract;
+      }
+
+      if (proxyContractType === 'transparent' && !proxyAdminName) {
+        throw new Error(`Transparent proxies requires an contract for admin`);
+      }
+
+      if (!proxyAdminDeployed) {
+        proxyAdminDeployed = await _deployOne(proxyAdminName, {
+          from: options.from,
+          autoMine: options.autoMine,
+          estimateGasExtra: options.estimateGasExtra,
+          estimatedGasLimit: options.estimatedGasLimit,
+          gasPrice: options.gasPrice,
+          log: options.log,
+          contract: proxyAdminContract,
+          skipIfAlreadyDeployed: true,
+          args: [owner], // TODO change ProxyAdmin implementation
+        });
+      }
+
+      proxyAdmin = proxyAdminDeployed.address;
+      currentProxyAdminOwner = (await read(proxyAdminName, 'owner')) as string;
+
+      if (currentProxyAdminOwner.toLowerCase() !== owner.toLowerCase()) {
+        throw new Error(
+          `To change owner/admin, you need to call transferOwnership on ${proxyAdminName}`
+        );
+      }
+      if (currentProxyAdminOwner === AddressZero) {
+        throw new Error(
+          `The Proxy Admin (${proxyAdminName}) belongs to no-one. The Proxy cannot be upgraded anymore`
+        );
+      }
+    }
+
     const implementation = await _deployOne(
       implementationName,
       implementationOptions
@@ -888,26 +1005,33 @@ Plus they are only used when the contract is meant to be used as standalone when
         const proxyOptions = {...options}; // ensure no change
         delete proxyOptions.proxy;
         proxyOptions.contract = proxyContract;
-        proxyOptions.args = [implementation.address, data, owner];
+        proxyOptions.args =
+          proxyContractType === 'transparent'
+            ? [implementation.address, proxyAdmin, data]
+            : [implementation.address, data, proxyAdmin];
         proxy = await _deployOne(proxyName, proxyOptions);
         // console.log(`proxy deployed at ${proxy.address} for ${proxy.receipt.gasUsed}`);
       } else {
-        let currentOwner: string;
+        const ownerStorage = await provider.getStorageAt(
+          proxy.address,
+          '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103'
+        );
+        const currentOwner = getAddress(
+          BigNumber.from(ownerStorage).toHexString()
+        );
 
-        try {
-          currentOwner = await read(proxyName, {...options}, 'owner');
-        } catch (e) {
-          const ownerStorage = await provider.getStorageAt(
-            // fallback on old proxy // TODO test
-            proxy.address,
-            '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103'
-          );
-          currentOwner = getAddress(BigNumber.from(ownerStorage).toHexString());
-        }
+        const changeOwnershipMethod =
+          proxyContractType === 'transparent'
+            ? 'changeAdmin'
+            : 'transferOwnership';
+        const changeImplementationMethod =
+          proxyContractType === 'transparent'
+            ? 'upgradeToAndCall'
+            : 'changeImplementation';
 
-        if (currentOwner.toLowerCase() !== owner.toLowerCase()) {
+        if (currentOwner.toLowerCase() !== proxyAdmin.toLowerCase()) {
           throw new Error(
-            'To change owner, you need to call `transferOwnership`'
+            `To change owner/admin, you need to call ${changeOwnershipMethod}`
           );
         }
         if (currentOwner === AddressZero) {
@@ -916,15 +1040,57 @@ Plus they are only used when the contract is meant to be used as standalone when
           );
         }
 
-        const executeReceipt = await execute(
-          proxyName,
-          {...options, from: currentOwner},
-          'changeImplementation',
-          implementation.address,
-          data
-        );
-        if (!executeReceipt) {
-          throw new Error('could not execute `changeImplementation`');
+        if (proxyAdminName) {
+          if (!currentProxyAdminOwner) {
+            throw new Error(`no currentProxyAdminOwner found in ProxyAdmin`);
+          }
+          let executeReceipt;
+          if (updateMethod) {
+            executeReceipt = await execute(
+              proxyAdminName,
+              {...options, from: currentProxyAdminOwner},
+              'upgradeAndCall',
+              proxy.address,
+              implementation.address,
+              data
+            );
+          } else {
+            executeReceipt = await execute(
+              proxyAdminName,
+              {...options, from: currentProxyAdminOwner},
+              'upgrade',
+              proxy.address,
+              implementation.address
+            );
+          }
+          if (!executeReceipt) {
+            throw new Error(`could not execute ${changeImplementationMethod}`);
+          }
+        } else {
+          let executeReceipt;
+          if (
+            changeImplementationMethod === 'upgradeToAndCall' &&
+            !updateMethod
+          ) {
+            executeReceipt = await execute(
+              proxyName,
+              {...options, from: currentOwner},
+              'upgrade',
+              implementation.address
+            );
+          } else {
+            executeReceipt = await execute(
+              proxyName,
+              {...options, from: currentOwner},
+              changeImplementationMethod,
+              implementation.address,
+              data
+            );
+          }
+
+          if (!executeReceipt) {
+            throw new Error(`could not execute ${changeImplementationMethod}`);
+          }
         }
       }
       const proxiedDeployment: DeploymentSubmission = {
@@ -989,12 +1155,6 @@ Plus they are only used when the contract is meant to be used as standalone when
     if (typeof options.proxy === 'object') {
       address = options.proxy.owner || address;
     }
-    return getFrom(address);
-  }
-
-  function getDiamondOwner(options: DiamondOptions) {
-    let address = options.from; // admim default to msg.sender
-    address = options.owner || address;
     return getFrom(address);
   }
 
@@ -1078,37 +1238,18 @@ Plus they are only used when the contract is meant to be used as standalone when
       return deployResult;
     }
 
-    if (options.deterministicSalt) {
-      throw new Error(`diamond determinsitc deployment not implemented yet`);
-    }
-
     const proxyName = name + '_DiamondProxy';
-    const {address: owner, hardwareWallet} = getDiamondOwner(options);
-    const newSelectors: string[] = [];
-    const facetSnapshot: Facet[] = [];
-    const oldFacets: Facet[] = [];
-    const selectorToNotTouch: {[selector: string]: boolean} = {};
-    for (const selector of [
-      '0xcdffacc6',
-      '0x52ef6b2c',
-      '0xadfca15e',
-      '0x7a0ed627',
-      '0x01ffc9a7',
-      '0x1f931c1c',
-      '0xf2fde38b',
-      '0x8da5cb5b',
-    ]) {
-      selectorToNotTouch[selector] = true;
-    }
+    const {address: owner, hardwareWallet} = getProxyOwner(options);
+    const facetSnapshot: FacetCut[] = [];
+    const oldFacets: FacetCut[] = [];
     if (oldDeployment) {
       proxy = await getDeployment(proxyName);
       const diamondProxy = new Contract(proxy.address, proxy.abi, provider);
 
-      const currentFacets: Facet[] = await diamondProxy.facets();
-      for (const currentFacet of currentFacets) {
-        oldFacets.push(currentFacet);
+      const currentFacetCuts: FacetCut[] = await diamondProxy.facets();
+      for (const currentFacetCut of currentFacetCuts) {
+        oldFacets.push(currentFacetCut);
 
-        // TODO check selector
         // ensure DiamondLoupeFacet, OwnershipFacet and DiamondCutFacet are kept // TODO options to delete cut them out?
         if (
           findAll(
@@ -1119,13 +1260,15 @@ Plus they are only used when the contract is meant to be used as standalone when
               '0x7a0ed627',
               '0x01ffc9a7',
             ],
-            currentFacet.functionSelectors
+            currentFacetCut.functionSelectors
           ) || // Loupe
-          currentFacet.functionSelectors[0] === '0x1f931c1c' || // DiamoncCut
-          findAll(['0xf2fde38b', '0x8da5cb5b'], currentFacet.functionSelectors) // ERC173
+          currentFacetCut.functionSelectors[0] === 'e712b4e1' || // DiamoncCut
+          findAll(
+            ['0xf2fde38b', '0x8da5cb5b'],
+            currentFacetCut.functionSelectors
+          ) // ERC173
         ) {
-          facetSnapshot.push(currentFacet);
-          newSelectors.push(...currentFacet.functionSelectors);
+          facetSnapshot.push(currentFacetCut);
         }
       }
     }
@@ -1155,85 +1298,44 @@ Plus they are only used when the contract is meant to be used as standalone when
       });
       if (implementation.newlyDeployed) {
         // console.log(`facet ${facet} deployed at ${implementation.address}`);
-        const newFacet = {
+        changesDetected = true;
+        const facetCut = {
           facetAddress: implementation.address,
           functionSelectors: sigsFromABI(implementation.abi),
         };
-        facetSnapshot.push(newFacet);
-        newSelectors.push(...newFacet.functionSelectors);
+        facetCuts.push(facetCut);
+        facetSnapshot.push(facetCut);
       } else {
         const oldImpl = await getDeployment(facet);
-        const newFacet = {
+        const facetCut = {
           facetAddress: oldImpl.address,
           functionSelectors: sigsFromABI(oldImpl.abi),
         };
-        facetSnapshot.push(newFacet);
-        newSelectors.push(...newFacet.functionSelectors);
-      }
-    }
-
-    const oldSelectors: string[] = [];
-    const oldSelectorsFacetAddress: {[selector: string]: string} = {};
-    for (const oldFacet of oldFacets) {
-      for (const selector of oldFacet.functionSelectors) {
-        oldSelectors.push(selector);
-        oldSelectorsFacetAddress[selector] = oldFacet.facetAddress;
-      }
-    }
-
-    for (const newFacet of facetSnapshot) {
-      const selectorsToAdd: string[] = [];
-      const selectorsToReplace: string[] = [];
-
-      for (const selector of newFacet.functionSelectors) {
-        if (oldSelectors.indexOf(selector) > 0) {
-          if (
-            oldSelectorsFacetAddress[selector].toLowerCase() !==
-              newFacet.facetAddress.toLowerCase() &&
-            !selectorToNotTouch[selector]
-          ) {
-            selectorsToReplace.push(selector);
-          }
-        } else {
-          if (!selectorToNotTouch[selector]) {
-            selectorsToAdd.push(selector);
-          }
+        facetSnapshot.push(facetCut);
+        if (
+          !oldFacets.find(
+            (f) =>
+              f.facetAddress.toLowerCase() === oldImpl.address.toLowerCase()
+          )
+        ) {
+          facetCuts.push(facetCut);
         }
       }
-
-      if (selectorsToReplace.length > 0) {
-        changesDetected = true;
-        facetCuts.push({
-          facetAddress: newFacet.facetAddress,
-          functionSelectors: selectorsToReplace,
-          action: FacetCutAction.Replace,
-        });
-      }
-
-      if (selectorsToAdd.length > 0) {
-        changesDetected = true;
-        facetCuts.push({
-          facetAddress: newFacet.facetAddress,
-          functionSelectors: selectorsToAdd,
-          action: FacetCutAction.Add,
-        });
-      }
     }
 
-    const selectorsToDelete: string[] = [];
-    for (const selector of oldSelectors) {
-      if (newSelectors.indexOf(selector) === -1) {
-        selectorsToDelete.push(selector);
+    for (const oldFacet of oldFacets) {
+      if (
+        !facetSnapshot.find(
+          (f) =>
+            f.facetAddress.toLowerCase() === oldFacet.facetAddress.toLowerCase()
+        )
+      ) {
+        changesDetected = true;
+        facetCuts.unshift({
+          facetAddress: '0x0000000000000000000000000000000000000000',
+          functionSelectors: oldFacet.functionSelectors,
+        });
       }
-    }
-
-    if (selectorsToDelete.length > 0) {
-      changesDetected = true;
-      facetCuts.unshift({
-        facetAddress: '0x0000000000000000000000000000000000000000',
-        functionSelectors: selectorsToDelete,
-        action: FacetCutAction.Remove,
-      });
     }
 
     let data = '0x';
@@ -1378,19 +1480,12 @@ Plus they are only used when the contract is meant to be used as standalone when
         }
         const currentOwner = await read(proxyName, 'owner');
         if (currentOwner.toLowerCase() !== owner.toLowerCase()) {
-          throw new Error(
-            'To change owner, you need to call `transferOwnership`'
-          );
-        }
-        if (currentOwner === AddressZero) {
-          throw new Error(
-            'The Diamond belongs to no-one. It cannot be upgraded anymore'
-          );
+          throw new Error(`The Diamond owner is not ${owner}`);
         }
 
         const executeReceipt = await execute(
           name,
-          {...options, from: currentOwner},
+          options,
           'diamondCut',
           facetCuts,
           data === '0x'
@@ -1422,21 +1517,6 @@ Plus they are only used when the contract is meant to be used as standalone when
         newlyDeployed: true,
       };
     } else {
-      const oldDeployment = await env.deployments.get(name);
-
-      const proxiedDeployment: DeploymentSubmission = {
-        ...oldDeployment,
-        facets: facetSnapshot,
-        diamondCut: facetCuts,
-        abi,
-        execute: options.execute,
-      };
-      // TODO ?
-      // proxiedDeployment.history = proxiedDeployment.history
-      //   ? proxiedDeployment.history.concat([oldDeployment])
-      //   : [oldDeployment];
-      await saveDeployment(name, proxiedDeployment);
-
       const deployment = await env.deployments.get(name);
       return {
         ...deployment,

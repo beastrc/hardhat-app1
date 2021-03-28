@@ -87,23 +87,30 @@ export interface ProxyOptions {
   owner?: Address;
   upgradeIndex?: number;
   methodName?: string;
-  proxyContract?: string; // default to EIP173Proxy
-}
-
-export interface DeployOptionsBase extends TxOptions {
-  contract?:
+  proxyContract?: // default to EIP173Proxy
+  string | {type: 'transparent' | 'default'; artifact: string | ArtifactData};
+  viaAdminContract?:
     | string
     | {
-        abi: ABI;
-        bytecode: string;
-        deployedBytecode?: string;
-        metadata?: string;
-        methodIdentifiers?: any;
-        storageLayout?: any;
-        userdoc?: any;
-        devdoc?: any;
-        gasEstimates?: any;
+        name: string;
+        artifact?: string | ArtifactData;
       };
+}
+
+export type ArtifactData = {
+  abi: ABI;
+  bytecode: string;
+  deployedBytecode?: string;
+  metadata?: string;
+  methodIdentifiers?: any;
+  storageLayout?: any;
+  userdoc?: any;
+  devdoc?: any;
+  gasEstimates?: any;
+};
+
+export interface DeployOptionsBase extends TxOptions {
+  contract?: string | ArtifactData;
   args?: any[];
   fieldsToCompare?: string | string[];
   skipIfAlreadyDeployed?: boolean;
@@ -249,20 +256,10 @@ export type MultiExport = {
 
 export type Libraries = {[libraryName: string]: Address};
 
-export enum FacetCutAction {
-  Add,
-  Replace,
-  Remove,
-}
-
-export type FacetCut = Facet & {
-  action: FacetCutAction;
-};
-
-export type Facet = {
+export interface FacetCut {
   facetAddress: string;
   functionSelectors: string[];
-};
+}
 
 export interface DeploymentSubmission {
   abi: ABI;
@@ -282,7 +279,7 @@ export interface DeploymentSubmission {
   devdoc?: any;
   methodIdentifiers?: any;
   diamondCut?: FacetCut[];
-  facets?: Facet[];
+  facets?: FacetCut[];
   execute?: {
     methodName: string;
     args: any[];
@@ -314,7 +311,7 @@ export interface Deployment {
   devdoc?: any;
   methodIdentifiers?: any;
   diamondCut?: FacetCut[];
-  facets?: Facet[];
+  facets?: FacetCut[];
   storageLayout?: any;
   gasEstimates?: any;
 }
