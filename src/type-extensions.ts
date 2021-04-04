@@ -2,7 +2,6 @@
 import 'hardhat/types/runtime';
 import 'hardhat/types/config';
 import {Address, DeploymentsExtension} from '../types';
-import {EthereumProvider} from 'hardhat/types';
 
 declare module 'hardhat/types/config' {
   interface HardhatUserConfig {
@@ -46,7 +45,6 @@ declare module 'hardhat/types/config' {
     saveDeployments?: boolean;
     tags?: string[];
     deploy?: string | string[];
-    companionNetworks?: {[name: string]: string};
   }
 
   interface HttpNetworkUserConfig {
@@ -54,7 +52,6 @@ declare module 'hardhat/types/config' {
     saveDeployments?: boolean;
     tags?: string[];
     deploy?: string | string[];
-    companionNetworks?: {[name: string]: string};
   }
 
   interface ProjectPathsUserConfig {
@@ -68,7 +65,6 @@ declare module 'hardhat/types/config' {
     saveDeployments: boolean;
     tags: string[];
     deploy?: string[];
-    companionNetworks: {[name: string]: string};
   }
 
   interface HttpNetworkConfig {
@@ -76,7 +72,6 @@ declare module 'hardhat/types/config' {
     saveDeployments: boolean;
     tags: string[];
     deploy?: string[];
-    companionNetworks: {[name: string]: string};
   }
 
   interface ProjectPathsConfig {
@@ -94,17 +89,6 @@ declare module 'hardhat/types/runtime' {
     }>;
     getUnnamedAccounts: () => Promise<string[]>;
     getChainId(): Promise<string>;
-    companionNetworks: {
-      [name: string]: {
-        deployments: DeploymentsExtension;
-        getNamedAccounts: () => Promise<{
-          [name: string]: Address;
-        }>;
-        getUnnamedAccounts: () => Promise<string[]>;
-        getChainId(): Promise<string>;
-        provider: EthereumProvider;
-      };
-    };
   }
 
   interface Network {
@@ -112,6 +96,5 @@ declare module 'hardhat/types/runtime' {
     saveDeployments: boolean;
     tags: Record<string, boolean>;
     deploy: string[];
-    companionNetworks: {[name: string]: string};
   }
 }
