@@ -1,0 +1,11 @@
+{
+  "mode": "pre",
+  "tag": "next",
+  "initialVersions": {
+    "hardhat-deploy": "0.7.0"
+  },
+  "changesets": [
+    "chilled-needles-sneeze",
+    "dirty-houses-explain"
+  ]
+}
