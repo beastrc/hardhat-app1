@@ -11,7 +11,6 @@ import {
   Artifact,
   BuildInfo,
 } from 'hardhat/types';
-import {createProvider} from 'hardhat/internal/core/providers/construction'; // TODO harhdat argument types not from internal
 import {Deployment, ExtendedArtifact} from '../types';
 import {extendEnvironment, task, subtask, extendConfig} from 'hardhat/config';
 import {HARDHAT_NETWORK_NAME, HardhatPluginError} from 'hardhat/plugins';
@@ -22,6 +21,7 @@ import {
   TASK_NODE_GET_PROVIDER,
   TASK_NODE_SERVER_READY,
 } from 'hardhat/builtin-tasks/task-names';
+import {lazyObject} from 'hardhat/plugins';
 
 import debug from 'debug';
 const log = debug('hardhat:wighawag:hardhat-deploy');
@@ -31,6 +31,7 @@ import chokidar from 'chokidar';
 import {submitSources} from './etherscan';
 import {submitSourcesToSourcify} from './sourcify';
 import {Network} from 'hardhat/types/runtime';
+import {store} from './globalStore';
 
 export const TASK_DEPLOY = 'deploy';
 export const TASK_DEPLOY_MAIN = 'deploy:main';
@@ -148,11 +149,7 @@ extendConfig(
   }
 );
 
-function networkFromConfig(
-  env: HardhatRuntimeEnvironment,
-  network: Network,
-  companion: boolean
-) {
+function networkFromConfig(env: HardhatRuntimeEnvironment, network: Network) {
   let live = true;
   if (network.name === 'localhost' || network.name === 'hardhat') {
     // the 2 default network are not live network
@@ -175,12 +172,7 @@ function networkFromConfig(
   } else {
     network.deploy = env.config.paths.deploy;
   }
-
-  if (companion && network.config.companionNetworks) {
-    network.companionNetworks = network.config.companionNetworks;
-  } else {
-    network.companionNetworks = {};
-  }
+  store.networkDeployPaths[network.name] = network.deploy; // fallback to global store
 
   if (network.config.live !== undefined) {
     live = network.config.live;
@@ -196,9 +188,12 @@ function networkFromConfig(
 log('start...');
 let deploymentsManager: DeploymentsManager;
 extendEnvironment((env) => {
-  networkFromConfig(env, env.network, true);
+  networkFromConfig(env, env.network);
   if (deploymentsManager === undefined || env.deployments === undefined) {
-    deploymentsManager = new DeploymentsManager(env);
+    deploymentsManager = new DeploymentsManager(
+      env,
+      lazyObject(() => env.network) // IMPORTANT, else other plugin cannot set env.network before end, like solidity-coverage does here in the coverage task :  https://github.com/sc-forks/solidity-coverage/blob/3c0f3a5c7db26e82974873bbf61cf462072a7c6d/plugins/resources/nomiclabs.utils.js#L93-L98
+    );
     env.deployments = deploymentsManager.deploymentsExtension;
     env.getNamedAccounts = deploymentsManager.getNamedAccounts.bind(
       deploymentsManager
@@ -209,63 +204,6 @@ extendEnvironment((env) => {
     env.getChainId = () => {
       return deploymentsManager.getChainId();
     };
-
-    env.companionNetworks = {};
-    for (const name of Object.keys(env.network.companionNetworks)) {
-      const networkName = env.network.companionNetworks[name];
-      if (networkName === env.network.name) {
-        deploymentsManager.addCompanionManager(name, deploymentsManager);
-        const extraNetwork = {
-          deployments: deploymentsManager.deploymentsExtension,
-          getNamedAccounts: () => deploymentsManager.getNamedAccounts(),
-          getUnnamedAccounts: () => deploymentsManager.getUnnamedAccounts(),
-          getChainId: () => deploymentsManager.getChainId(),
-          provider: env.network.provider,
-        };
-        env.companionNetworks[name] = extraNetwork;
-        continue;
-      }
-      const config = env.config.networks[networkName];
-      if (!('url' in config) || networkName === 'hardhat') {
-        throw new Error(
-          `in memory network like hardhat are not supported as companion network`
-        );
-      }
-
-      const tags: {[tag: string]: boolean} = {};
-      const tagsCollected = config.tags || [];
-      for (const tag of tagsCollected) {
-        tags[tag] = true;
-      }
-
-      const network = {
-        name: networkName,
-        config,
-        provider: createProvider(
-          networkName,
-          config,
-          env.config.paths,
-          env.artifacts
-        ),
-        live: config.live,
-        saveDeployments: config.saveDeployments,
-        tags,
-        deploy: config.deploy || env.config.paths.deploy,
-        companionNetworks: {},
-      };
-      networkFromConfig(env, network, false);
-      const networkDeploymentsManager = new DeploymentsManager(env, network);
-      deploymentsManager.addCompanionManager(name, networkDeploymentsManager);
-      const extraNetwork = {
-        deployments: networkDeploymentsManager.deploymentsExtension,
-        getNamedAccounts: () => networkDeploymentsManager.getNamedAccounts(),
-        getUnnamedAccounts: () =>
-          networkDeploymentsManager.getUnnamedAccounts(),
-        getChainId: () => networkDeploymentsManager.getChainId(),
-        provider: network.provider,
-      };
-      env.companionNetworks[name] = extraNetwork;
-    }
   }
   log('ready');
 });
@@ -428,8 +366,10 @@ subtask(TASK_DEPLOY_MAIN, 'deploy')
       [name: string]: Deployment;
     }> | null = args.watchOnly ? null : compileAndDeploy();
     if (args.watch || args.watchOnly) {
+      const deployPaths =
+        hre.network.deploy || store.networkDeployPaths[hre.network.name]; // fallback to global store
       const watcher = chokidar.watch(
-        [hre.config.paths.sources, ...hre.network.deploy],
+        [hre.config.paths.sources, ...deployPaths],
         {
           ignored: /(^|[/\\])\../, // ignore dotfiles
           persistent: true,
@@ -562,6 +502,7 @@ task(TASK_DEPLOY, 'Deploy contracts')
       hre.network.deploy = [
         normalizePath(hre.config, args.deployScripts, args.deployScripts),
       ];
+      store.networkDeployPaths[hre.network.name] = hre.network.deploy; // fallback to global store
     }
     args.log = !args.silent;
     delete args.silent;
