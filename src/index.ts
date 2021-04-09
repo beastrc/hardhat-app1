@@ -11,7 +11,6 @@ import {
   Artifact,
   BuildInfo,
 } from 'hardhat/types';
-import {createProvider} from 'hardhat/internal/core/providers/construction'; // TODO harhdat argument types not from internal
 import {Deployment, ExtendedArtifact} from '../types';
 import {extendEnvironment, task, subtask, extendConfig} from 'hardhat/config';
 import {HARDHAT_NETWORK_NAME, HardhatPluginError} from 'hardhat/plugins';
@@ -150,11 +149,7 @@ extendConfig(
   }
 );
 
-function networkFromConfig(
-  env: HardhatRuntimeEnvironment,
-  network: Network,
-  companion: boolean
-) {
+function networkFromConfig(env: HardhatRuntimeEnvironment, network: Network) {
   let live = true;
   if (network.name === 'localhost' || network.name === 'hardhat') {
     // the 2 default network are not live network
@@ -179,12 +174,6 @@ function networkFromConfig(
   }
   store.networkDeployPaths[network.name] = network.deploy; // fallback to global store
 
-  if (companion && network.config.companionNetworks) {
-    network.companionNetworks = network.config.companionNetworks;
-  } else {
-    network.companionNetworks = {};
-  }
-
   if (network.config.live !== undefined) {
     live = network.config.live;
   }
@@ -199,7 +188,7 @@ function networkFromConfig(
 log('start...');
 let deploymentsManager: DeploymentsManager;
 extendEnvironment((env) => {
-  networkFromConfig(env, env.network, true);
+  networkFromConfig(env, env.network);
   if (deploymentsManager === undefined || env.deployments === undefined) {
     deploymentsManager = new DeploymentsManager(
       env,
@@ -215,63 +204,6 @@ extendEnvironment((env) => {
     env.getChainId = () => {
       return deploymentsManager.getChainId();
     };
-
-    env.companionNetworks = {};
-    for (const name of Object.keys(env.network.companionNetworks)) {
-      const networkName = env.network.companionNetworks[name];
-      if (networkName === env.network.name) {
-        deploymentsManager.addCompanionManager(name, deploymentsManager);
-        const extraNetwork = {
-          deployments: deploymentsManager.deploymentsExtension,
-          getNamedAccounts: () => deploymentsManager.getNamedAccounts(),
-          getUnnamedAccounts: () => deploymentsManager.getUnnamedAccounts(),
-          getChainId: () => deploymentsManager.getChainId(),
-          provider: lazyObject(() => env.network.provider),
-        };
-        env.companionNetworks[name] = extraNetwork;
-        continue;
-      }
-      const config = env.config.networks[networkName];
-      if (!('url' in config) || networkName === 'hardhat') {
-        throw new Error(
-          `in memory network like hardhat are not supported as companion network`
-        );
-      }
-
-      const tags: {[tag: string]: boolean} = {};
-      const tagsCollected = config.tags || [];
-      for (const tag of tagsCollected) {
-        tags[tag] = true;
-      }
-
-      const network = {
-        name: networkName,
-        config,
-        provider: createProvider(
-          networkName,
-          config,
-          env.config.paths,
-          env.artifacts
-        ),
-        live: config.live,
-        saveDeployments: config.saveDeployments,
-        tags,
-        deploy: config.deploy || env.config.paths.deploy,
-        companionNetworks: {},
-      };
-      networkFromConfig(env, network, false);
-      const networkDeploymentsManager = new DeploymentsManager(env, network);
-      deploymentsManager.addCompanionManager(name, networkDeploymentsManager);
-      const extraNetwork = {
-        deployments: networkDeploymentsManager.deploymentsExtension,
-        getNamedAccounts: () => networkDeploymentsManager.getNamedAccounts(),
-        getUnnamedAccounts: () =>
-          networkDeploymentsManager.getUnnamedAccounts(),
-        getChainId: () => networkDeploymentsManager.getChainId(),
-        provider: network.provider,
-      };
-      env.companionNetworks[name] = extraNetwork;
-    }
   }
   log('ready');
 });
