@@ -57,11 +57,8 @@ export async function getExtendedArtifactFromFolder(
     const hardhatArtifact: Artifact = await artifacts.readArtifact(name);
     // check if name is already a fullyQualifiedName
     let fullyQualifiedName = name;
-    let contractName = name;
     if (!fullyQualifiedName.includes(':')) {
       fullyQualifiedName = `${hardhatArtifact.sourceName}:${name}`;
-    } else {
-      contractName = fullyQualifiedName.split(':')[1];
     }
     const buildInfo = await artifacts.getBuildInfo(fullyQualifiedName);
     if (buildInfo) {
@@ -69,7 +66,7 @@ export async function getExtendedArtifactFromFolder(
       const solcInputHash = Buffer.from(murmur128(solcInput)).toString('hex');
       artifact = {
         ...hardhatArtifact,
-        ...buildInfo.output.contracts[hardhatArtifact.sourceName][contractName],
+        ...buildInfo.output.contracts[hardhatArtifact.sourceName][name],
         solcInput,
         solcInputHash,
       };
