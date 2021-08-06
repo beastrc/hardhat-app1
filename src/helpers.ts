@@ -1160,7 +1160,7 @@ Note that in this case, the contract deployment will not behave the same if depl
           '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103'
         );
         const currentOwner = getAddress(
-          `0x${ownerStorage.substr(-40)}`
+          BigNumber.from(ownerStorage).toHexString()
         );
 
         const oldProxy = proxy.abi.find(
