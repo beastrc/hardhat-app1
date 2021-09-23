@@ -399,15 +399,14 @@ export function addHelpers(
       hardwareWallet,
       unknown,
     } = getFrom(options.from);
-    const create2DeployerAddress = await deploymentManager.getDeterministicDeploymentFactoryAddress();
+    const create2DeployerAddress = '0x4e59b44847b379578588920ca78fbf26c0b4956c';
     const code = await provider.getCode(create2DeployerAddress);
     if (code === '0x') {
-      const senderAddress = await deploymentManager.getDeterministicDeploymentFactoryDeployer();
+      const senderAddress = '0x3fab184622dc19b6109349b94811493bf2a45362';
 
-      // TODO: calculate required funds
       const txRequest = {
         to: senderAddress,
-        value: (await deploymentManager.getDeterministicDeploymentFactoryFunding()).toHexString(),
+        value: BigNumber.from('10000000000000000').toHexString(),
         gasPrice: options.gasPrice,
         maxFeePerGas: options.maxFeePerGas,
         maxPriorityFeePerGas: options.maxPriorityFeePerGas,
@@ -449,7 +448,7 @@ export function addHelpers(
         }
       }
       const deployTx = await provider.sendTransaction(
-        await deploymentManager.getDeterministicDeploymentFactoryDeploymentTx()
+        '0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222'
       );
       if (options.log || hardwareWallet) {
         log(` (tx: ${deployTx.hash})...`);
@@ -607,7 +606,7 @@ export function addHelpers(
       };
     }
     tx = await onPendingTx(tx, name, preDeployment);
-    const receipt = await tx.wait();
+    const receipt = await tx.wait(options.waitConfirmations);
     const address =
       options.deterministicDeployment && create2Address
         ? create2Address
@@ -672,7 +671,7 @@ export function addHelpers(
     } else {
       return {
         address: getCreate2Address(
-          await deploymentManager.getDeterministicDeploymentFactoryAddress(),
+          '0x4e59b44847b379578588920ca78fbf26c0b4956c',
           options.salt
             ? hexlify(zeroPad(options.salt, 32))
             : '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -725,7 +724,8 @@ export function addHelpers(
           typeof options.deterministicDeployment === 'string'
             ? hexlify(zeroPad(options.deterministicDeployment, 32))
             : '0x0000000000000000000000000000000000000000000000000000000000000000';
-        const create2DeployerAddress = await deploymentManager.getDeterministicDeploymentFactoryAddress();
+        const create2DeployerAddress =
+          '0x4e59b44847b379578588920ca78fbf26c0b4956c';
         const create2Address = getCreate2Address(
           create2DeployerAddress,
           create2Salt,
@@ -1007,6 +1007,7 @@ export function addHelpers(
       libraries: options.libraries,
       linkedData: options.linkedData,
       args: implementationArgs,
+      waitConfirmations: options.waitConfirmations
     };
 
     const {artifact} = await getArtifactFromOptions(
@@ -1127,6 +1128,7 @@ Note that in this case, the contract deployment will not behave the same if depl
           deterministicDeployment: options.deterministicDeployment,
           skipIfAlreadyDeployed: true,
           args: [owner],
+          waitConfirmations: options.waitConfirmations
         });
       }
 
