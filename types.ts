@@ -165,7 +165,6 @@ export interface TxOptions extends CallOptions {
   autoMine?: boolean;
   estimatedGasLimit?: string | number | BigNumber;
   estimateGasExtra?: string | number | BigNumber;
-  waitConfirmations?: number
 }
 
 export interface Execute extends TxOptions {
@@ -348,4 +347,11 @@ export interface Deployment {
   facets?: Facet[];
   storageLayout?: any;
   gasEstimates?: any;
+}
+
+export interface DeterministicDeploymentInfo {
+  factory: string,
+  deployer: string,
+  funding: string,
+  signedTx: string,
 }
