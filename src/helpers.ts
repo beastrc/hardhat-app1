@@ -399,15 +399,14 @@ export function addHelpers(
       hardwareWallet,
       unknown,
     } = getFrom(options.from);
-    const create2DeployerAddress = await deploymentManager.getDeterministicDeploymentFactoryAddress();
+    const create2DeployerAddress = '0x4e59b44847b379578588920ca78fbf26c0b4956c';
     const code = await provider.getCode(create2DeployerAddress);
     if (code === '0x') {
-      const senderAddress = await deploymentManager.getDeterministicDeploymentFactoryDeployer();
+      const senderAddress = '0x3fab184622dc19b6109349b94811493bf2a45362';
 
-      // TODO: calculate required funds
       const txRequest = {
         to: senderAddress,
-        value: (await deploymentManager.getDeterministicDeploymentFactoryFunding()).toHexString(),
+        value: BigNumber.from('10000000000000000').toHexString(),
         gasPrice: options.gasPrice,
         maxFeePerGas: options.maxFeePerGas,
         maxPriorityFeePerGas: options.maxPriorityFeePerGas,
@@ -449,7 +448,7 @@ export function addHelpers(
         }
       }
       const deployTx = await provider.sendTransaction(
-        await deploymentManager.getDeterministicDeploymentFactoryDeploymentTx()
+        '0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222'
       );
       if (options.log || hardwareWallet) {
         log(` (tx: ${deployTx.hash})...`);
@@ -672,7 +671,7 @@ export function addHelpers(
     } else {
       return {
         address: getCreate2Address(
-          await deploymentManager.getDeterministicDeploymentFactoryAddress(),
+          '0x4e59b44847b379578588920ca78fbf26c0b4956c',
           options.salt
             ? hexlify(zeroPad(options.salt, 32))
             : '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -725,7 +724,8 @@ export function addHelpers(
           typeof options.deterministicDeployment === 'string'
             ? hexlify(zeroPad(options.deterministicDeployment, 32))
             : '0x0000000000000000000000000000000000000000000000000000000000000000';
-        const create2DeployerAddress = await deploymentManager.getDeterministicDeploymentFactoryAddress();
+        const create2DeployerAddress =
+          '0x4e59b44847b379578588920ca78fbf26c0b4956c';
         const create2Address = getCreate2Address(
           create2DeployerAddress,
           create2Salt,
@@ -1485,7 +1485,7 @@ Note that in this case, the contract deployment will not behave the same if depl
         (fragment: {type: string; inputs: any[]}) =>
           fragment.type === 'constructor'
       );
-      if (constructor) {
+      if (constructor && constructor.inputs.length > 0) {
         throw new Error(`Facet with constructor not yet supported`); // TODO remove that requirement
       }
       abi = mergeABIs([abi, artifact.abi], {
@@ -1663,11 +1663,44 @@ Note that in this case, the contract deployment will not behave the same if depl
           }
         }
 
+        // this is with the default Diamantaire based on create2
+        const builtinDiamondCut = [
+          {
+            // DiamondCutFacet
+            facetAddress: '0x35d80a53f7be635f75152221d4d71cd4dcb07e5c',
+            action: 0,
+            functionSelectors: ['0x1f931c1c'],
+          },
+          {
+            // DiamondLoupeFacet
+            facetAddress: '0xc1bbdf9f8c0b6ae0b4d35e9a778080b691a72a3e',
+            action: 0,
+            functionSelectors: [
+              '0xadfca15e',
+              '0x7a0ed627',
+              '0xcdffacc6',
+              '0x52ef6b2c',
+              '0x01ffc9a7',
+            ],
+          },
+          {
+            // OwnershipFacet
+            facetAddress: '0xcfEe10af6C7A91863c2bbDbCCA3bCB5064A447BE',
+            action: 0,
+            functionSelectors: ['0xf2fde38b', '0x8da5cb5b'],
+          },
+        ];
+
+        const diamondConstructorArgs = [
+          builtinDiamondCut,
+          {owner: diamantaireDeployment.address},
+        ];
+
         if (expectedAddress && deterministicDiamondAlreadyDeployed) {
           proxy = {
             ...diamondBase,
             address: expectedAddress,
-            args: [diamantaireDeployment.address],
+            args: diamondConstructorArgs,
           };
           await saveDeployment(proxyName, proxy);
         } else {
@@ -1717,7 +1750,7 @@ Note that in this case, the contract deployment will not behave the same if depl
             address: proxyAddress,
             receipt: createReceipt,
             transactionHash: createReceipt.transactionHash,
-            args: [diamantaireDeployment.address],
+            args: diamondConstructorArgs,
           };
           await saveDeployment(proxyName, proxy);
         }
