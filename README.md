@@ -247,7 +247,7 @@ export type Receipt = {
 
 Here is an example:
 
-Let's say you have:
+Let sey you have:
 
 - 2 Contract named Greeter and Registry deployed on rinkeby
 - 1 contract named Greeter on mainnet
