@@ -25,8 +25,8 @@ import {
   loadAllDeployments,
   traverseMultipleDirectory,
   deleteDeployments,
-  getExtendedArtifactFromFolder,
-  getArtifactFromFolder,
+  getExtendedArtifactFromFolders,
+  getArtifactFromFolders,
   getNetworkName,
   getDeployPaths,
 } from './utils';
@@ -64,7 +64,7 @@ export class DeploymentsManager {
     maxFeePerGas?: string;
     maxPriorityFeePerGas?: string;
     migrations: {[id: string]: number};
-    onlyArtifacts?: string;
+    onlyArtifacts?: string[];
     runAsNode: boolean;
   };
 
@@ -182,7 +182,7 @@ export class DeploymentsManager {
       },
       getArtifact: async (contractName: string): Promise<Artifact> => {
         if (this.db.onlyArtifacts) {
-          const artifactFromFolder = await getArtifactFromFolder(
+          const artifactFromFolder = await getArtifactFromFolders(
             contractName,
             this.db.onlyArtifacts
           );
@@ -194,31 +194,25 @@ export class DeploymentsManager {
           return artifactFromFolder as Artifact;
         }
         let artifact: Artifact | ExtendedArtifact | undefined =
-          await getArtifactFromFolder(
-            contractName,
-            this.env.config.paths.artifacts
-          );
+          await getArtifactFromFolders(contractName, [
+            this.env.config.paths.artifacts,
+          ]);
         if (artifact) {
           return artifact as Artifact;
         }
         const importPaths = this.getImportPaths();
-        for (const importPath of importPaths) {
-          artifact = await getArtifactFromFolder(contractName, importPath);
-          if (artifact) {
-            return artifact as Artifact;
-          }
-        }
+        artifact = await getArtifactFromFolders(contractName, importPaths);
 
         if (!artifact) {
           throw new Error(`cannot find artifact "${contractName}"`);
         }
-        return artifact;
+        return artifact as Artifact;
       },
       getExtendedArtifact: async (
         contractName: string
       ): Promise<ExtendedArtifact> => {
         if (this.db.onlyArtifacts) {
-          const artifactFromFolder = await getExtendedArtifactFromFolder(
+          const artifactFromFolder = await getExtendedArtifactFromFolders(
             contractName,
             this.db.onlyArtifacts
           );
@@ -230,22 +224,19 @@ export class DeploymentsManager {
           return artifactFromFolder as ExtendedArtifact;
         }
         let artifact: ExtendedArtifact | undefined =
-          await getExtendedArtifactFromFolder(
-            contractName,
-            this.env.config.paths.artifacts
-          );
+          await getExtendedArtifactFromFolders(contractName, [
+            this.env.config.paths.artifacts,
+          ]);
         if (artifact) {
           return artifact;
         }
         const importPaths = this.getImportPaths();
-        for (const importPath of importPaths) {
-          artifact = await getExtendedArtifactFromFolder(
-            contractName,
-            importPath
-          );
-          if (artifact) {
-            return artifact;
-          }
+        artifact = await getExtendedArtifactFromFolders(
+          contractName,
+          importPaths
+        );
+        if (artifact) {
+          return artifact;
         }
 
         if (!artifact) {
@@ -1333,8 +1324,13 @@ export class DeploymentsManager {
         chainId,
         contracts: currentNetworkDeployments,
       };
-      const out = JSON.stringify(all, null, '  ');
-      this._writeExports(options.exportAll, out);
+      const splitted = options.exportAll.split(',');
+      for (const split of splitted) {
+        if (split) {
+          fs.ensureDirSync(path.dirname(split));
+          fs.writeFileSync(split, JSON.stringify(all, null, '  ')); // TODO remove bytecode ?
+        }
+      }
 
       log('export-all complete');
     }
@@ -1366,24 +1362,14 @@ export class DeploymentsManager {
         chainId,
         contracts: currentNetworkDeployments,
       };
-      const out = JSON.stringify(singleExport, null, '  ');
-      this._writeExports(options.export, out);
+      const splitted = options.export.split(',');
+      for (const split of splitted) {
+        if (split) {
+          fs.ensureDirSync(path.dirname(split));
+          fs.writeFileSync(split, JSON.stringify(singleExport, null, '  ')); // TODO remove bytecode ?
+        }
+      }
       log('single export complete');
-    }
-  }
-
-  private _writeExports(dests: string, output: string) {
-    const splitted = dests.split(',');
-    for (const split of splitted) {
-      if (!split) {
-        continue;
-      }
-      if (split === '-') {
-        process.stdout.write(output);
-      } else {
-        fs.ensureDirSync(path.dirname(split));
-        fs.writeFileSync(split, output); // TODO remove bytecode ?
-      }
     }
   }
 
@@ -1391,7 +1377,7 @@ export class DeploymentsManager {
     const importPaths = [this.env.config.paths.imports];
     if (this.env.config.external && this.env.config.external.contracts) {
       for (const externalContracts of this.env.config.external.contracts) {
-        importPaths.push(externalContracts.artifacts);
+        importPaths.push(...externalContracts.artifacts);
       }
     }
     return importPaths;
