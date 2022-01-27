@@ -544,8 +544,8 @@ export class DeploymentsManager {
       );
       // await new Promise(r => setTimeout(r, 20000));
       const wait = tx.wait.bind(tx);
-      tx.wait = async () => {
-        const receipt = await wait();
+      tx.wait = async (confirmations?: number) => {
+        const receipt = await wait(confirmations);
         // console.log("checking pending tx...");
         delete this.db.pendingTransactions[tx.hash];
         if (Object.keys(this.db.pendingTransactions).length === 0) {
@@ -561,8 +561,8 @@ export class DeploymentsManager {
       };
     } else {
       const wait = tx.wait.bind(tx);
-      tx.wait = async () => {
-        const receipt = await wait();
+      tx.wait = async (confirmations?: number) => {
+        const receipt = await wait(confirmations);
         this.db.gasUsed = this.db.gasUsed.add(receipt.gasUsed);
         return receipt;
       };
@@ -1324,8 +1324,13 @@ export class DeploymentsManager {
         chainId,
         contracts: currentNetworkDeployments,
       };
-      const out = JSON.stringify(all, null, '  ');
-      this._writeExports(options.exportAll, out);
+      const splitted = options.exportAll.split(',');
+      for (const split of splitted) {
+        if (split) {
+          fs.ensureDirSync(path.dirname(split));
+          fs.writeFileSync(split, JSON.stringify(all, null, '  ')); // TODO remove bytecode ?
+        }
+      }
 
       log('export-all complete');
     }
@@ -1357,24 +1362,14 @@ export class DeploymentsManager {
         chainId,
         contracts: currentNetworkDeployments,
       };
-      const out = JSON.stringify(singleExport, null, '  ');
-      this._writeExports(options.export, out);
+      const splitted = options.export.split(',');
+      for (const split of splitted) {
+        if (split) {
+          fs.ensureDirSync(path.dirname(split));
+          fs.writeFileSync(split, JSON.stringify(singleExport, null, '  ')); // TODO remove bytecode ?
+        }
+      }
       log('single export complete');
-    }
-  }
-
-  private _writeExports(dests: string, output: string) {
-    const splitted = dests.split(',');
-    for (const split of splitted) {
-      if (!split) {
-        continue;
-      }
-      if (split === '-') {
-        process.stdout.write(output);
-      } else {
-        fs.ensureDirSync(path.dirname(split));
-        fs.writeFileSync(split, output); // TODO remove bytecode ?
-      }
     }
   }
 
