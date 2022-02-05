@@ -117,7 +117,7 @@ task(TASK_COMPILE).setAction(async (args, hre, runSuper) => {
 
 const config: HardhatUserConfig = {
   solidity: {
-    version: '0.8.10',
+    version: '0.7.6',
     settings: {
       optimizer: {
         enabled: true,
@@ -126,7 +126,7 @@ const config: HardhatUserConfig = {
     },
   },
   paths: {
-    sources: 'solc_0.8',
+    sources: 'solc_0.7',
   },
 };
 
