@@ -1,0 +1,12 @@
+{
+  "mode": "pre",
+  "tag": "next",
+  "initialVersions": {
+    "hardhat-deploy": "0.10.4"
+  },
+  "changesets": [
+    "cold-jokes-return",
+    "mighty-dodos-peel",
+    "seven-llamas-mix"
+  ]
+}
