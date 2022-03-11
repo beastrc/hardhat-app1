@@ -1,41 +1,5 @@
 # hardhat-deploy
 
-## 0.11.0-next.5
-
-### Patch Changes
-
-- diamond : do not save diamondCut + do not resave if no changes
-
-## 0.11.0-next.4
-
-### Patch Changes
-
-- fix old diamond detection
-
-## 0.11.0-next.3
-
-### Patch Changes
-
-- support old diamond + fix Loupe typo
-
-## 0.11.0-next.2
-
-### Patch Changes
-
-- fix
-
-## 0.11.0-next.1
-
-### Patch Changes
-
-- fix
-
-## 0.11.0-next.0
-
-### Minor Changes
-
-- revamp diamond support
-
 ## 0.10.5
 
 ### Patch Changes
