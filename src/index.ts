@@ -248,10 +248,6 @@ function networkFromConfig(
   } else {
     network.saveDeployments = network.config.saveDeployments;
   }
-
-  if (network.config.autoImpersonate !== undefined) {
-    network.autoImpersonate = network.config.autoImpersonate;
-  }
 }
 
 log('start...');
