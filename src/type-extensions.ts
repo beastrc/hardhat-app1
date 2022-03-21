@@ -64,7 +64,6 @@ declare module 'hardhat/types/config' {
     deploy?: string | string[];
     companionNetworks?: {[name: string]: string};
     verify?: {etherscan?: {apiKey?: string; apiUrl?: string}};
-    autoImpersonate?: boolean;
   }
 
   interface HttpNetworkUserConfig {
@@ -74,7 +73,6 @@ declare module 'hardhat/types/config' {
     deploy?: string | string[];
     companionNetworks?: {[name: string]: string};
     verify?: {etherscan?: {apiKey?: string; apiUrl?: string}};
-    autoImpersonate?: boolean;
   }
 
   interface ProjectPathsUserConfig {
@@ -90,7 +88,6 @@ declare module 'hardhat/types/config' {
     deploy?: string[];
     companionNetworks: {[name: string]: string};
     verify?: {etherscan?: {apiKey?: string; apiUrl?: string}};
-    autoImpersonate?: boolean;
   }
 
   interface HttpNetworkConfig {
@@ -100,7 +97,6 @@ declare module 'hardhat/types/config' {
     deploy?: string[];
     companionNetworks: {[name: string]: string};
     verify?: {etherscan?: {apiKey?: string; apiUrl?: string}};
-    autoImpersonate?: boolean;
   }
 
   interface ProjectPathsConfig {
@@ -138,6 +134,5 @@ declare module 'hardhat/types/runtime' {
     deploy: string[];
     companionNetworks: {[name: string]: string};
     verify?: {etherscan?: {apiKey?: string; apiUrl?: string}};
-    autoImpersonate?: boolean;
   }
 }
